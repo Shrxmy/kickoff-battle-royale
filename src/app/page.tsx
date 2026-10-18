@@ -3,9 +3,9 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { Crown, LogOut } from "lucide-react";
-import { BOT, INTRO_MS, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
+import { BOT, FINAL_INTRO_MS, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
 import { inboxName, post, roomName, subscribe, type Status } from "@/lib/realtime";
-import { AVATARS, Avatar, Brand, Burst, Confetti, Countdown, Energy, Fighter, TitlePill, VsIntro } from "@/components/game";
+import { AVATARS, Avatar, Brand, Burst, Confetti, Countdown, Energy, Fighter, Footer, Standoff, TitlePill, VsIntro, type FighterInfo } from "@/components/game";
 import { card, cta, focus, input, letters, pill, tiles } from "@/components/ui";
 
 type Me = { code: string; id: string; name: string; avatar: string };
@@ -71,6 +71,7 @@ export default function PlayPage() {
       <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-5 p-4">
         {me ? <Game me={me} onLeave={leave} /> : <JoinForm draft={draft} setDraft={setDraft} onEnter={enter} />}
       </main>
+      {!me && <Footer />}
     </div>
   );
 }
@@ -280,31 +281,45 @@ const opponent = (duels: [string, string][], id: string) => {
 
 function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }) {
   const opp = opponent(msg.duels, me.id);
-  // Whatever is left beyond the answer window is VS intro; a phone rejoining mid-round gets none.
-  const [intro] = useState(() => Math.max(0, Math.min(INTRO_MS, msg.left - msg.duration * 1000)));
+  // Whatever is left beyond the answer window is intro; a phone rejoining mid-round gets none.
+  const [intro] = useState(() => Math.max(0, Math.min(FINAL_INTRO_MS, msg.left - msg.duration * 1000)));
   const [asking, setAsking] = useState(intro === 0);
   useEffect(() => {
     const t = setTimeout(() => setAsking(true), intro);
     return () => clearTimeout(t);
   }, [intro]);
 
+  const fighter = (id: string): FighterInfo => {
+    if (id === BOT) return { avatar: BOT, name: "CSAR Bot" };
+    const [name, avatar, energy] = msg.players[id];
+    return { avatar, name: id === me.id ? "You" : name, energy };
+  };
+  // The last two players get a standoff, and knocked-out phones watch it too.
+  // The host flags the round where the last two first meet; remaining time only sets how long the splash runs.
+  const [a, b] = msg.duels[0] ?? [];
+  const final = msg.final && msg.duels.length === 1;
+  const splash = final ? (
+    <Standoff ms={intro} a={fighter(opp ? me.id : a)} b={fighter(opp ?? b)} caption={opp ? "Last CSAR standing wins" : "Eyes on the big screen"} />
+  ) : (
+    opp && <VsIntro ms={intro} center="VS" top={<Fighter {...fighter(opp)} tilt="rotate-3" />} bottom={<Fighter {...fighter(me.id)} />} />
+  );
+
   if (!opp) {
     const [, , energy] = msg.players[me.id];
-    return energy > 0 ? (
-      <Notice title="Sit this one out" text="You'll be paired next round." />
-    ) : (
-      <Notice title="You're out!" text="Out of energy. Watch the big screen to see who wins." img="sad" />
+    return (
+      <>
+        {splash}
+        {energy > 0 ? (
+          <Notice title="Sit this one out" text="You'll be paired next round." />
+        ) : (
+          <Notice title="You're out!" text="Out of energy. Watch the big screen to see who wins." img="sad" />
+        )}
+      </>
     );
   }
-  const [oppName, oppAvatar] = msg.players[opp];
   return (
     <>
-      <VsIntro
-        ms={intro}
-        center="VS"
-        top={<Fighter avatar={opp === BOT ? BOT : oppAvatar} name={opp === BOT ? "CSAR Bot" : oppName} tilt="rotate-3" />}
-        bottom={<Fighter avatar={me.avatar} name="You" />}
-      />
+      {splash}
       {asking && <Ask me={me} msg={msg} opp={opp} left={Math.max(0, msg.left - intro)} />}
     </>
   );

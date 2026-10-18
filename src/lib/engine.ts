@@ -5,9 +5,11 @@ export const BOT = "bot";
 export const MAX_PLAYERS = 90; // shortcut: Supabase free plan caps 100 msgs/s and each broadcast costs one per phone; Pro (500/s) allows ~400
 export const GRACE_MS = 1500; // REST answers from phones need a moment to arrive
 export const INTRO_MS = 2000; // VS splash before each question; added to the round so nobody loses answer time
+export const FINAL_INTRO_MS = 3800; // longer standoff when the last two players meet
 
 export type Question = { text: string; choices: string[]; correct: number };
-export type Settings = { energy: number; duration: number }; // duration in seconds
+// duration in seconds; the shuffles default to on (older saved settings lack them)
+export type Settings = { energy: number; duration: number; shuffleQuestions?: boolean; shuffleAnswers?: boolean };
 export type Player = {
   id: string;
   name: string;
@@ -18,7 +20,7 @@ export type Player = {
   totalMs: number;
   place?: number; // set when eliminated or when the game ends
   lastFoe?: string; // last round's opponent, so pairing can avoid back-to-back rematches
-  bots?: number; // rounds spent against the bot, so the easy draw rotates
+  bots?: number; // rounds spent against the bot or sitting out, so the odd seat rotates
 };
 export type Answer = { choice: number; ms: number };
 export type Duel = [string, string];
@@ -39,6 +41,7 @@ export type Game = {
   endsAt: number;
   results: DuelResult[];
   kicked?: string[]; // removed by the host or left mid-game: can't rejoin, left off the ranking
+  finalRound?: number; // round the last two first met; only that one gets the long standoff intro
 };
 
 type Rand = () => number;
@@ -47,7 +50,7 @@ type Rand = () => number;
 export type PlayerMap = Record<string, [string, string, number]>;
 export type HostMsg = (
   | { t: "lobby"; players: [string, string, string][] }
-  | { t: "round"; n: number; q: { text: string; choices: string[] }; duration: number; left: number; duels: Duel[]; players: PlayerMap }
+  | { t: "round"; n: number; q: { text: string; choices: string[] }; duration: number; left: number; duels: Duel[]; players: PlayerMap; final: boolean }
   | { t: "result"; n: number; q: { text: string; choices: string[] }; correct: number; results: DuelResult[]; players: PlayerMap }
   | { t: "end"; ranking: { id: string; name: string; avatar: string; energy: number; place: number; correct: number }[] }
 ) & { out: string[] };
@@ -168,7 +171,10 @@ function dodge(s: string[], rand: Rand, lastFoe: Record<string, string | undefin
   return s;
 }
 
-export function pair(ids: string[], rand: Rand = Math.random, lastFoe: Record<string, string | undefined> = {}, bots: Record<string, number> = {}): Duel[] {
+// `bye`: the odd player sits out instead of facing the bot.
+export function pair(
+  ids: string[], rand: Rand = Math.random, lastFoe: Record<string, string | undefined> = {}, bots: Record<string, number> = {}, bye = false,
+): Duel[] {
   const s = shuffle(ids, rand);
   // Odd count: the bot is the easy draw, so whoever has faced it least gets it (shuffle order
   // breaks ties), unless that forces a rematch the next candidate avoids (3 players left).
@@ -179,7 +185,7 @@ export function pair(ids: string[], rand: Rand = Math.random, lastFoe: Record<st
     if (!best || rematches(rest, lastFoe) < rematches(best.rest, lastFoe)) best = { solo, rest };
     if (rematches(rest, lastFoe) === 0) break;
   }
-  const duels: Duel[] = best!.solo ? [[best!.solo, BOT]] : [];
+  const duels: Duel[] = best!.solo && !bye ? [[best!.solo, BOT]] : [];
   for (let i = 0; i < best!.rest.length; i += 2) duels.push([best!.rest[i], best!.rest[i + 1]]);
   return duels;
 }
@@ -188,18 +194,32 @@ export function startRound(g: Game, now: number, rand: Rand = Math.random): Game
   // Shuffled deck: no repeats until every question is used, then reshuffle.
   let deck = g.deck;
   if (!deck.length) {
-    deck = shuffle(g.questions.map((_, i) => i), rand);
+    const all = g.questions.map((_, i) => i);
+    deck = g.settings.shuffleQuestions === false ? all : shuffle(all, rand);
     // Don't open the fresh deck with the question that just ended the old one.
     if (g.round > 0 && deck.length > 1 && deck[0] === g.q) deck = [...deck.slice(1), deck[0]];
   }
+  // Each time a question comes up its choices get a fresh order; the correct index follows its text.
+  let questions = g.questions;
+  if (g.settings.shuffleAnswers !== false) {
+    const q = questions[deck[0]];
+    const order = shuffle(q.choices.map((_, i) => i), rand);
+    const mixed = { text: q.text, choices: order.map((i) => q.choices[i]), correct: order.indexOf(q.correct) };
+    questions = questions.map((x, i) => (i === deck[0] ? mixed : x));
+  }
   const living = alive(g);
+  // With 3 left a bot duel could knock out two at once and skip the final, so the odd one sits out.
   const duels = pair(
     living.map((p) => p.id),
     rand,
     Object.fromEntries(living.map((p) => [p.id, p.lastFoe])),
     Object.fromEntries(living.map((p) => [p.id, p.bots ?? 0])),
+    living.length === 3,
   );
   const players = { ...g.players };
+  for (const p of living) {
+    if (!duels.some((d) => d.includes(p.id))) players[p.id] = { ...p, lastFoe: undefined, bots: (p.bots ?? 0) + 1 };
+  }
   for (const [a, b] of duels) {
     players[a] = { ...players[a], lastFoe: b, bots: (players[a].bots ?? 0) + (b === BOT ? 1 : 0) };
     if (b !== BOT) players[b] = { ...players[b], lastFoe: a };
@@ -207,6 +227,7 @@ export function startRound(g: Game, now: number, rand: Rand = Math.random): Game
   return {
     ...g,
     phase: "question",
+    questions,
     round: g.round + 1,
     q: deck[0],
     deck: deck.slice(1),
@@ -214,7 +235,8 @@ export function startRound(g: Game, now: number, rand: Rand = Math.random): Game
     players,
     answers: {},
     results: [],
-    endsAt: now + INTRO_MS + g.settings.duration * 1000 + GRACE_MS,
+    finalRound: g.finalRound ?? (living.length === 2 ? g.round + 1 : undefined),
+    endsAt: now + (living.length === 2 && !g.finalRound ? FINAL_INTRO_MS : INTRO_MS) + g.settings.duration * 1000 + GRACE_MS,
   };
 }
 
@@ -327,6 +349,7 @@ export function publicView(g: Game, now: number): HostMsg {
         left: Math.max(0, g.endsAt - GRACE_MS - now),
         duels: g.duels,
         players: playerMap(g),
+        final: g.round === g.finalRound,
       };
     case "result":
       return { t: "result", out, n: g.round, q: view, correct: q.correct, results: g.results, players: playerMap(g) };

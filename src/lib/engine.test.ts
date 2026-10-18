@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  BOT, INTRO_MS, MAX_PLAYERS, alive, answer, allAnswered, end, finishRound, isOver, join, kick, leave, newGame, pair, parseQuestions, publicView, rank, resolveDuel, startRound,
+  BOT, FINAL_INTRO_MS, INTRO_MS, MAX_PLAYERS, alive, answer, allAnswered, end, finishRound, isOver, join, kick, leave, newGame, pair, parseQuestions, publicView, rank, resolveDuel, startRound,
   type Game,
 } from "./engine.ts";
 
@@ -9,7 +9,7 @@ const Q = [{ text: "2+2?", choices: ["3", "4", "5", "6"], correct: 1 }];
 const seq = (...xs: number[]) => () => xs.length > 1 ? xs.shift()! : xs[0];
 
 function lobby(n: number, energy = 1): Game {
-  let g = newGame("123456", { energy, duration: 20 }, Q);
+  let g = newGame("123456", { energy, duration: 20, shuffleAnswers: false }, Q);
   for (let i = 0; i < n; i++) g = join(g, { id: `p${i}`, name: `P${i}`, avatar: "TECHDEV" });
   return g;
 }
@@ -36,7 +36,7 @@ test("pairing is fair: the bot rotates and nobody faces the same opponent twice 
     let g = lobby(5, 10);
     let prev: string[] = [];
     for (let r = 0; r < 10; r++) {
-      g = startRound(g, -INTRO_MS);
+      g = startRound(g, -FINAL_INTRO_MS);
       const humans = g.duels.filter(([, b]) => b !== BOT).map((d) => [...d].sort().join());
       assert.ok(humans.every((d) => !prev.includes(d)), "no back-to-back rematch");
       prev = humans;
@@ -54,6 +54,25 @@ test("pairing is fair: the bot rotates and nobody faces the same opponent twice 
   assert.deepEqual(pair(["a", "b"], Math.random, { a: "b", b: "a" }).flat().sort(), ["a", "b"]);
 });
 
+test("three left: one duel and a rotating sit-out, so the game always ends in a 1v1 final", () => {
+  for (let trial = 0; trial < 200; trial++) {
+    let g = lobby(3, 1);
+    let sawFinal = false;
+    while (!isOver(g) && g.round < 300) {
+      g = startRound(g, -FINAL_INTRO_MS);
+      if (alive(g).length === 3) {
+        assert.equal(g.duels.length, 1);
+        assert.ok(!g.duels[0].includes(BOT), "no bot with three left");
+      }
+      if (alive(g).length === 2) sawFinal = true;
+      for (const id of g.duels.flat()) if (id !== BOT) g = answer(g, { id, n: g.round, choice: Math.floor(Math.random() * 4), ms: Math.random() * 20000 }, 0);
+      g = finishRound(g, Math.random);
+    }
+    assert.ok(sawFinal, "reached a two-player final");
+    assert.deepEqual(rank(end(g)).map((p) => p.place), [1, 2, 3], "no shared places from a double knockout");
+  }
+});
+
 test("join is lobby-only, trims names, caps players", () => {
   let g = lobby(MAX_PLAYERS);
   assert.equal(Object.keys(join(g, { id: "x", name: "X", avatar: "A" }).players).length, MAX_PLAYERS);
@@ -63,7 +82,7 @@ test("join is lobby-only, trims names, caps players", () => {
   for (const bad of [null, {}, { id: 1, name: "x", avatar: "A" }, { id: "q", name: 5, avatar: "A" }, { id: "q", name: "x" }]) {
     assert.equal(join(g, bad as never), g, `malformed join ${JSON.stringify(bad)}`);
   }
-  g = startRound(lobby(2), -INTRO_MS);
+  g = startRound(lobby(2), -FINAL_INTRO_MS);
   assert.equal(join(g, { id: "late", name: "Late", avatar: "A" }), g);
   assert.equal(answer(g, null as never, 0), g, "malformed answer");
   assert.equal(answer(g, { id: "p0", n: g.round, choice: 1, ms: 5 }, g.endsAt + 1), g, "after the grace deadline");
@@ -76,7 +95,7 @@ test("join is lobby-only, trims names, caps players", () => {
 });
 
 test("answers are validated and clamped", () => {
-  const g = startRound(lobby(2), -INTRO_MS);
+  const g = startRound(lobby(2), -FINAL_INTRO_MS);
   assert.equal(answer(g, { id: "p0", n: g.round + 1, choice: 1, ms: 5 }, 0), g, "wrong round");
   assert.equal(answer(g, { id: "ghost", n: g.round, choice: 1, ms: 5 }, 0), g, "not in a duel");
   assert.equal(answer(g, { id: "p0", n: g.round, choice: 9, ms: 5 }, 0), g, "choice out of range");
@@ -88,7 +107,7 @@ test("answers are validated and clamped", () => {
 });
 
 test("loser drops energy, elimination, game over, ranking", () => {
-  let g = startRound(lobby(2, 1), -INTRO_MS);
+  let g = startRound(lobby(2, 1), -FINAL_INTRO_MS);
   g = answer(g, { id: "p0", n: 1, choice: 1, ms: 800 }, 0);
   g = answer(g, { id: "p1", n: 1, choice: 1, ms: 300 }, 0);
   g = finishRound(g);
@@ -106,7 +125,7 @@ test("draws cost nothing; same-round knockouts share a place; someone always sur
   for (let trial = 0; trial < 200; trial++) {
     let g = lobby(5, 1);
     while (!isOver(g)) {
-      g = startRound(g, -INTRO_MS);
+      g = startRound(g, -FINAL_INTRO_MS);
       for (const id of g.duels.flat()) {
         if (id !== BOT && Math.random() < 0.8) g = answer(g, { id, n: g.round, choice: Math.floor(Math.random() * 4), ms: Math.random() * 20000 }, 0);
       }
@@ -116,13 +135,13 @@ test("draws cost nothing; same-round knockouts share a place; someone always sur
     const left = Object.values(g.players).filter((p) => p.energy > 0);
     assert.ok(left.length >= 1, "at least one survivor");
   }
-  let g = startRound(lobby(4, 1), -INTRO_MS, seq(0.5));
+  let g = startRound(lobby(4, 1), -FINAL_INTRO_MS, seq(0.5));
   // p? vs p? twice; everyone answers wrong -> all draws.
   for (const id of g.duels.flat()) g = answer(g, { id, n: 1, choice: 0, ms: 1 }, 0);
   g = finishRound(g);
   assert.ok(Object.values(g.players).every((p) => p.energy === 1));
   // Two winners, two losers -> both losers share 3rd.
-  g = startRound(g, -INTRO_MS);
+  g = startRound(g, -FINAL_INTRO_MS);
   for (const [a, b] of g.duels) {
     g = answer(g, { id: a, n: g.round, choice: 1, ms: 1 }, 0);
     g = answer(g, { id: b, n: g.round, choice: 0, ms: 1 }, 0);
@@ -142,7 +161,7 @@ test("removing players: lobby kicks ban, leaves don't, mid-game removal knocks o
   assert.ok(join(g, { id: "p2", name: "P2", avatar: "A" }).players.p2, "a phone that left can come back");
   assert.deepEqual(publicView(kick(g, "p1"), 0).out, ["p1"], "phones learn they were removed");
 
-  g = startRound(lobby(4, 3), -INTRO_MS, seq(0.5));
+  g = startRound(lobby(4, 3), -FINAL_INTRO_MS, seq(0.5));
   const [a, b] = g.duels[0];
   g = kick(g, a);
   assert.equal(g.players[a].energy, 0);
@@ -161,7 +180,7 @@ test("removing players: lobby kicks ban, leaves don't, mid-game removal knocks o
 });
 
 test("a removed player's answer no longer decides the duel", () => {
-  let g = startRound(lobby(2, 3), -INTRO_MS);
+  let g = startRound(lobby(2, 3), -FINAL_INTRO_MS);
   const [a, b] = g.duels[0];
   g = answer(g, { id: a, n: 1, choice: 1, ms: 1 }, 0);
   g = answer(g, { id: b, n: 1, choice: 1, ms: 900 }, 0);
@@ -172,7 +191,7 @@ test("a removed player's answer no longer decides the duel", () => {
 
 test("removals keep places gap-free; the host can remove knocked-out players, Leave can't", () => {
   // 5 players, 1 energy: two duels knock out two players (shared 4th), p? sits with the bot.
-  let g = startRound(lobby(5, 1), -INTRO_MS, seq(0.5));
+  let g = startRound(lobby(5, 1), -FINAL_INTRO_MS, seq(0.5));
   for (const [x, y] of g.duels) {
     if (y === BOT) continue;
     g = answer(g, { id: x, n: 1, choice: 1, ms: 1 }, 0);
@@ -198,13 +217,40 @@ test("questions are shuffled with no repeats until the deck runs out, never back
     let g: Game = { ...lobby(2, 10), questions: qs };
     const seen: number[] = [];
     for (let r = 0; r < 12; r++) {
-      g = startRound(g, -INTRO_MS);
+      g = startRound(g, -FINAL_INTRO_MS);
       seen.push(g.q);
       g = { ...g, phase: "result" };
     }
     for (let d = 0; d < 12; d += 4) assert.deepEqual(seen.slice(d, d + 4).sort(), [0, 1, 2, 3], "each pass uses every question once");
     assert.ok(seen.every((q, i) => i === 0 || q !== seen[i - 1]), "no question twice in a row");
   }
+});
+
+test("shuffle settings: answers move but the right answer follows; in-order mode keeps order; finals get a longer intro", () => {
+  const four = [{ text: "Q", choices: ["w", "x", "right", "z"], correct: 2 }];
+  const orders = new Set<string>();
+  for (let i = 0; i < 100; i++) {
+    const g = startRound({ ...lobby(4), questions: four, settings: { energy: 1, duration: 20 } }, -FINAL_INTRO_MS);
+    const q = g.questions[g.q];
+    assert.equal(q.choices[q.correct], "right");
+    assert.deepEqual([...q.choices].sort(), ["right", "w", "x", "z"]);
+    orders.add(q.choices.join());
+  }
+  assert.ok(orders.size > 1, "answer order changes");
+  const qs = [0, 1, 2, 3].map((i) => ({ ...Q[0], text: `Q${i}` }));
+  let g: Game = { ...lobby(4, 10), questions: qs, settings: { energy: 10, duration: 20, shuffleQuestions: false, shuffleAnswers: false } };
+  const seen: number[] = [];
+  for (let r = 0; r < 6; r++) {
+    g = startRound(g, 0);
+    seen.push(g.q);
+    g = { ...g, phase: "result" };
+  }
+  assert.deepEqual(seen, [0, 1, 2, 3, 0, 1], "in order, then around again");
+  const final = startRound(lobby(2), 0);
+  assert.equal(final.endsAt, FINAL_INTRO_MS + 20000 + 1500, "two left: standoff intro");
+  assert.equal(startRound({ ...final, phase: "result" }, 0).endsAt, INTRO_MS + 20000 + 1500, "later final rounds: normal intro");
+  assert.equal((publicView(final, 2500) as { final: boolean }).final, true, "phones are told it's the final, even joining mid-intro");
+  assert.equal((publicView(startRound({ ...final, phase: "result" }, 0), 0) as { final: boolean }).final, false);
 });
 
 test("parses pasted text and JSON question sets", () => {

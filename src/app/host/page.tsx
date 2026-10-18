@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Crown, Play, Users, X } from "lucide-react";
+import { Check, Crown, Play, Shuffle, Users, X } from "lucide-react";
 import {
-  BOT, GRACE_MS, INTRO_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
+  BOT, FINAL_INTRO_MS, GRACE_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
   type DuelResult, type Game, type PlayerMsg, type Settings,
 } from "@/lib/engine";
 import { inboxName, localOnly, roomName, subscribe, type Status } from "@/lib/realtime";
-import { Avatar, Brand, Burst, Confetti, Countdown, Energy, TitlePill, VsIntro } from "@/components/game";
+import { Avatar, Brand, Burst, Confetti, Countdown, Energy, Footer, Standoff, TitlePill, VsIntro, type FighterInfo } from "@/components/game";
 import { JoinQR } from "@/components/JoinQR";
 import { QuestionEditor, SAMPLE, questionsOf } from "@/components/QuestionEditor";
 import { card, cta, danger, focus, letters, pill, secondary, tiles } from "@/components/ui";
@@ -201,6 +201,7 @@ export default function HostPage() {
         )}
         {game?.phase === "end" && <Podium game={game} onNew={() => setGame(null)} />}
       </main>
+      {(!game || game.phase === "lobby" || game.phase === "end") && <Footer />}
     </div>
   );
 }
@@ -231,6 +232,21 @@ function Choice<T extends number>({ label, value, options, onChange, unit = "" }
   );
 }
 
+function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={() => onChange(!on)}
+      className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors ${focus} ${
+        on ? "bg-[#134687] text-white" : "bg-[#F3F8FF] text-[#134687] hover:bg-[#E8F2FF]"
+      }`}
+    >
+      <Shuffle size={14} aria-hidden /> {label} {on ? "on" : "off"}
+    </button>
+  );
+}
+
 function Setup({ text, setText, settings, setSettings, onOpen }: {
   text: string; setText: (t: string) => void; settings: Settings; setSettings: (s: Settings) => void; onOpen: () => void;
 }) {
@@ -244,6 +260,13 @@ function Setup({ text, setText, settings, setSettings, onOpen }: {
           <h2 className="font-poppins text-xl font-semibold">Settings</h2>
           <Choice label="Starting energy" value={settings.energy} options={[1, 3, 5, 7, 10]} onChange={(energy) => setSettings({ ...settings, energy })} />
           <Choice label="Time per question" value={settings.duration} options={[10, 20, 30]} unit="s" onChange={(duration) => setSettings({ ...settings, duration })} />
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-2 text-sm font-semibold">Shuffle</legend>
+            <div className="flex flex-wrap gap-2">
+              <Toggle label="Questions" on={settings.shuffleQuestions !== false} onChange={(shuffleQuestions) => setSettings({ ...settings, shuffleQuestions })} />
+              <Toggle label="Answers" on={settings.shuffleAnswers !== false} onChange={(shuffleAnswers) => setSettings({ ...settings, shuffleAnswers })} />
+            </div>
+          </fieldset>
           <p className="text-sm text-[#134687]/70">
             Players duel 1v1 on the same question. Right beats wrong, faster beats slower. The loser drops one energy; at
             zero they&apos;re out. Last CSAR standing wins.
@@ -327,13 +350,16 @@ function RemoveButton({ name, onClick }: { name: string; onClick: () => void }) 
 }
 
 // Remounted per round: plays the ROUND/FIGHT splash for the intro, then runs the answer timer.
-function TimerBar({ endsAt, duration, round, duels }: { endsAt: number; duration: number; round: number; duels: number }) {
-  const [intro] = useState(() => Math.max(0, Math.min(INTRO_MS, endsAt - GRACE_MS - Date.now() - duration * 1000)));
+function TimerBar({ endsAt, duration, round, duels, finalists }: {
+  endsAt: number; duration: number; round: number; duels: number; finalists?: [FighterInfo, FighterInfo];
+}) {
+  const [intro] = useState(() => Math.max(0, Math.min(FINAL_INTRO_MS, endsAt - GRACE_MS - Date.now() - duration * 1000)));
   const [asking, setAsking] = useState(intro <= 150);
   useEffect(() => {
     const t = setTimeout(() => setAsking(true), intro);
     return () => clearTimeout(t);
   }, [intro]);
+  if (!asking && finalists) return <Standoff ms={intro} a={finalists[0]} b={finalists[1]} caption="Last CSAR standing wins" />;
   if (!asking) {
     return (
       <VsIntro
@@ -370,6 +396,12 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
   const dueling = game.duels.flat().filter((id) => id !== BOT && !game.kicked?.includes(id));
   const answered = dueling.filter((id) => Object.hasOwn(game.answers, id)).length;
   const compact = game.duels.length > 12;
+  const [fa, fb] = game.duels[0] ?? [];
+  const sitting = alive(game).filter((p) => !game.duels.some((d) => d.includes(p.id)));
+  const finalists: [FighterInfo, FighterInfo] | undefined =
+    game.round === game.finalRound && game.duels.length === 1
+      ? [fa, fb].map((id) => ({ avatar: game.players[id].avatar, name: game.players[id].name, energy: game.players[id].energy })) as [FighterInfo, FighterInfo]
+      : undefined;
   return (
     <div className="flex flex-1 flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -393,7 +425,14 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
           {isOver(game) ? "Final results in" : "Next round in"} <Countdown key={game.round} ms={RESULT_MS} />…
         </p>
       ) : (
-        <TimerBar key={game.round} endsAt={game.endsAt} duration={game.settings.duration} round={game.round} duels={game.duels.length} />
+        <TimerBar
+          key={game.round}
+          endsAt={game.endsAt}
+          duration={game.settings.duration}
+          round={game.round}
+          duels={game.duels.length}
+          finalists={finalists}
+        />
       )}
       <section className={`${card} p-5 sm:p-8`}>
         <h2 className="text-center font-poppins text-2xl font-semibold sm:text-4xl">{q.text}</h2>
@@ -417,6 +456,9 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
           <DuelCard key={a} game={game} a={a} b={b} result={reveal ? results.get(a) : undefined} onKick={onKick} compact={compact} delay={Math.min(i * 30, 600)} />
         ))}
       </ul>
+      {sitting.length > 0 && (
+        <p className="text-center text-sm font-semibold text-[#134687]/60">{sitting.map((p) => p.name).join(", ")} sits this round out</p>
+      )}
       <div className="fixed right-4 bottom-4 hidden flex-col items-center gap-1 rounded-xl bg-white p-2 shadow-md lg:flex">
         <JoinQR url={joinUrl} className="size-24" />
         <span className="text-xs font-semibold">Rejoin · {game.code}</span>
@@ -434,13 +476,18 @@ function DuelCard({ game, a, b, result, onKick, compact, delay }: {
     const won = result?.winner === id;
     const lost = !!result?.winner && !won;
     return (
-      <div className={`group relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl p-2 ${won ? "bg-green-50 ring-2 ring-green-500" : ""} ${lost && !out ? "animate-shake" : ""}`}>
+      <div
+        className={`group relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-2 pt-4 pb-2 ring-2 ${
+          won ? "bg-green-50 ring-green-500" : lost ? "bg-red-50 ring-transparent" : "ring-transparent"
+        } ${lost && !out ? "animate-shake" : ""}`}
+      >
         {id !== BOT && !out && <RemoveButton name={p.name} onClick={() => onKick(id)} />}
         <div className="relative">
-          <Avatar id={id === BOT ? BOT : p.avatar} size={compact ? 40 : 56} className={p && p.energy === 0 ? "grayscale" : ""} />
-          {won && <Crown size={20} className="absolute -top-2 -right-2 fill-[#FFBC2B] text-[#CE9823]" aria-label="Winner" />}
+          <Avatar id={id === BOT ? BOT : p.avatar} size={compact ? 40 : 56} className={p && p.energy === 0 ? "opacity-70 grayscale" : ""} />
+          {won && <Crown size={20} className="absolute -top-4 left-1/2 -translate-x-1/2 animate-pop fill-[#FFBC2B] text-[#CE9823]" aria-label="Winner" />}
           {lost && (
-            <Burst className="absolute -top-3 -left-5 size-12 bg-[#E5383B] text-xs text-white" style={{ animationDelay: `${delay}ms` }}>
+            // Bottom corner, so the sticker never covers the face or spills off the card.
+            <Burst className="absolute -right-3 -bottom-2 size-10 bg-[#E5383B] text-[10px] text-white" style={{ animationDelay: `${delay}ms` }}>
               K.O.
             </Burst>
           )}
