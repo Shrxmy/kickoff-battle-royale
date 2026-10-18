@@ -6,6 +6,12 @@ export const MAX_PLAYERS = 90; // shortcut: Supabase free plan caps 100 msgs/s a
 export const GRACE_MS = 1500; // REST answers from phones need a moment to arrive
 export const INTRO_MS = 2000; // VS splash before each question; added to the round so nobody loses answer time
 export const FINAL_INTRO_MS = 3800; // longer standoff when the last two players meet
+export const READ_MS = 5000; // question shown alone before the choices (like Kahoot); also added to the round
+
+// Splits the time before answering opens into splash then reading time; a late joiner loses the splash first.
+export function stages(pre: number) {
+  return { splash: Math.min(FINAL_INTRO_MS, Math.max(0, pre - READ_MS)), read: Math.min(READ_MS, Math.max(0, pre)) };
+}
 
 export type Question = { text: string; choices: string[]; correct: number };
 // duration in seconds; the shuffles default to on (older saved settings lack them)
@@ -236,7 +242,7 @@ export function startRound(g: Game, now: number, rand: Rand = Math.random): Game
     answers: {},
     results: [],
     finalRound: g.finalRound ?? (living.length === 2 ? g.round + 1 : undefined),
-    endsAt: now + (living.length === 2 && !g.finalRound ? FINAL_INTRO_MS : INTRO_MS) + g.settings.duration * 1000 + GRACE_MS,
+    endsAt: now + (living.length === 2 && !g.finalRound ? FINAL_INTRO_MS : INTRO_MS) + READ_MS + g.settings.duration * 1000 + GRACE_MS,
   };
 }
 
@@ -246,7 +252,7 @@ const inDuel = (g: Game, id: string) => g.duels.some((d) => d.includes(id));
 export function answer(g: Game, a: { id: string; n: number; choice: number; ms: number }, now: number): Game {
   const q = g.questions[g.q];
   if (g.phase !== "question" || now > g.endsAt || a?.n !== g.round || typeof a.id !== "string" || a.id === BOT || isOut(g, a.id)) return g;
-  // Nothing counts during the VS intro (phones only show choices after it).
+  // Nothing counts during the VS intro or reading time (phones only show choices after them).
   if (now < g.endsAt - GRACE_MS - g.settings.duration * 1000) return g;
   if (Object.hasOwn(g.answers, a.id) || !inDuel(g, a.id)) return g;
   if (!Number.isInteger(a.choice) || a.choice < 0 || a.choice >= q.choices.length) return g;

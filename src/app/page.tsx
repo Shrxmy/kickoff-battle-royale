@@ -3,9 +3,9 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { Crown, LogOut } from "lucide-react";
-import { BOT, FINAL_INTRO_MS, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
+import { BOT, stages, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
 import { inboxName, post, roomName, subscribe, type Status } from "@/lib/realtime";
-import { AVATARS, Avatar, Brand, Burst, Confetti, Countdown, Energy, Fighter, Footer, Standoff, TitlePill, VsIntro, type FighterInfo } from "@/components/game";
+import { AVATARS, Avatar, Brand, Burst, Confetti, Countdown, Energy, Fighter, Footer, ReadBar, Standoff, TitlePill, VsIntro, type FighterInfo } from "@/components/game";
 import { card, cta, focus, input, letters, pill, tiles } from "@/components/ui";
 
 type Me = { code: string; id: string; name: string; avatar: string };
@@ -281,34 +281,38 @@ const opponent = (duels: [string, string][], id: string) => {
 
 function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }) {
   const opp = opponent(msg.duels, me.id);
-  // Whatever is left beyond the answer window is intro; a phone rejoining mid-round gets none.
-  const [intro] = useState(() => Math.max(0, Math.min(FINAL_INTRO_MS, msg.left - msg.duration * 1000)));
-  const [asking, setAsking] = useState(intro === 0);
+  // Time before answering opens = splash, then reading time; a phone rejoining mid-round gets only what's left.
+  const [pre] = useState(() => Math.max(0, msg.left - msg.duration * 1000));
+  const { splash, read } = stages(pre);
+  const [stage, setStage] = useState<"splash" | "read" | "answer">(splash > 150 ? "splash" : read > 0 ? "read" : "answer");
   useEffect(() => {
-    const t = setTimeout(() => setAsking(true), intro);
-    return () => clearTimeout(t);
-  }, [intro]);
+    const toRead = setTimeout(() => setStage((s) => (s === "splash" ? "read" : s)), splash);
+    const toAnswer = setTimeout(() => setStage("answer"), splash + read);
+    return () => {
+      clearTimeout(toRead);
+      clearTimeout(toAnswer);
+    };
+  }, [splash, read]);
 
   const fighter = (id: string): FighterInfo => {
     if (id === BOT) return { avatar: BOT, name: "CSAR Bot" };
     const [name, avatar, energy] = msg.players[id];
     return { avatar, name: id === me.id ? "You" : name, energy };
   };
-  // The last two players get a standoff, and knocked-out phones watch it too.
   // The host flags the round where the last two first meet; remaining time only sets how long the splash runs.
   const [a, b] = msg.duels[0] ?? [];
   const final = msg.final && msg.duels.length === 1;
-  const splash = final ? (
-    <Standoff ms={intro} a={fighter(opp ? me.id : a)} b={fighter(opp ?? b)} caption={opp ? "Last CSAR standing wins" : "Eyes on the big screen"} />
+  const overlay = final ? (
+    <Standoff ms={splash} a={fighter(opp ? me.id : a)} b={fighter(opp ?? b)} caption={opp ? "Last CSAR standing wins" : "Eyes on the big screen"} />
   ) : (
-    opp && <VsIntro ms={intro} center="VS" top={<Fighter {...fighter(opp)} tilt="rotate-3" />} bottom={<Fighter {...fighter(me.id)} />} />
+    opp && <VsIntro ms={splash} center="VS" top={<Fighter {...fighter(opp)} tilt="rotate-3" />} bottom={<Fighter {...fighter(me.id)} />} />
   );
 
   if (!opp) {
     const [, , energy] = msg.players[me.id];
     return (
       <>
-        {splash}
+        {overlay}
         {energy > 0 ? (
           <Notice title="Sit this one out" text="You'll be paired next round." />
         ) : (
@@ -319,8 +323,17 @@ function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }
   }
   return (
     <>
-      {splash}
-      {asking && <Ask me={me} msg={msg} opp={opp} left={Math.max(0, msg.left - intro)} />}
+      {overlay}
+      {stage === "answer" ? (
+        <Ask me={me} msg={msg} opp={opp} left={Math.max(0, msg.left - pre)} />
+      ) : (
+        <div className="flex flex-1 flex-col gap-4">
+          <span className="text-xs font-semibold text-[#134687]/60">Round {msg.n}</span>
+          <Duelists me={me.id} opp={opp} players={msg.players} />
+          <h2 className={`${card} animate-pop p-5 text-center font-poppins text-xl font-semibold sm:text-2xl`}>{msg.q.text}</h2>
+          {stage === "read" && <ReadBar ms={read + (splash > 150 ? 0 : splash)} />}
+        </div>
+      )}
     </>
   );
 }

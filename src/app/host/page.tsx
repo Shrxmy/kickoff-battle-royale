@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Crown, Play, Shuffle, Users, X } from "lucide-react";
 import {
-  BOT, FINAL_INTRO_MS, GRACE_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
-  type DuelResult, type Game, type PlayerMsg, type Settings,
+  BOT, GRACE_MS, MAX_PLAYERS, stages, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
+  type DuelResult, type Game, type PlayerMsg, type Question, type Settings,
 } from "@/lib/engine";
 import { inboxName, localOnly, roomName, subscribe, type Status } from "@/lib/realtime";
-import { Avatar, Brand, Burst, Confetti, Countdown, Energy, Footer, Standoff, TitlePill, VsIntro, type FighterInfo } from "@/components/game";
+import { Avatar, Brand, Burst, Confetti, Countdown, Energy, Footer, ReadBar, Standoff, TitlePill, VsIntro, type FighterInfo } from "@/components/game";
 import { JoinQR } from "@/components/JoinQR";
 import { QuestionEditor, SAMPLE, questionsOf } from "@/components/QuestionEditor";
 import { card, cta, danger, focus, letters, pill, secondary, tiles } from "@/components/ui";
@@ -349,28 +349,62 @@ function RemoveButton({ name, onClick }: { name: string; onClick: () => void }) 
   );
 }
 
-// Remounted per round: plays the ROUND/FIGHT splash for the intro, then runs the answer timer.
-function TimerBar({ endsAt, duration, round, duels, finalists }: {
-  endsAt: number; duration: number; round: number; duels: number; finalists?: [FighterInfo, FighterInfo];
-}) {
-  const [intro] = useState(() => Math.max(0, Math.min(FINAL_INTRO_MS, endsAt - GRACE_MS - Date.now() - duration * 1000)));
-  const [asking, setAsking] = useState(intro <= 150);
+// Remounted per round: splash (ROUND/FIGHT or the final standoff), then the question alone with a reading
+// bar, then the choices and the answer timer. Derived from the deadline, so a refreshed host lands in the right stage.
+function QuestionStage({ game, finalists }: { game: Game; finalists?: [FighterInfo, FighterInfo] }) {
+  const { endsAt, settings: { duration }, round } = game;
+  const [{ splash, read }] = useState(() => stages(endsAt - GRACE_MS - Date.now() - duration * 1000));
+  const [stage, setStage] = useState<"splash" | "read" | "answer">(splash > 150 ? "splash" : read > 0 ? "read" : "answer");
   useEffect(() => {
-    const t = setTimeout(() => setAsking(true), intro);
-    return () => clearTimeout(t);
-  }, [intro]);
-  if (!asking && finalists) return <Standoff ms={intro} a={finalists[0]} b={finalists[1]} caption="Last CSAR standing wins" />;
-  if (!asking) {
-    return (
-      <VsIntro
-        ms={intro}
-        center="FIGHT!"
-        top={<span className="font-poppins text-7xl font-black text-[#0E2A4D] italic drop-shadow-[4px_4px_0_white] sm:text-9xl">ROUND {round}</span>}
-        bottom={<span className="font-poppins text-4xl font-black text-white italic drop-shadow-[4px_4px_0_#0E2A4D] sm:text-6xl">{duels} duels</span>}
-      />
-    );
-  }
-  return <AnswerTimer endsAt={endsAt} duration={duration} />;
+    const toRead = setTimeout(() => setStage((s) => (s === "splash" ? "read" : s)), splash);
+    const toAnswer = setTimeout(() => setStage("answer"), splash + read);
+    return () => {
+      clearTimeout(toRead);
+      clearTimeout(toAnswer);
+    };
+  }, [splash, read]);
+  return (
+    <>
+      {stage === "splash" &&
+        (finalists ? (
+          <Standoff ms={splash} a={finalists[0]} b={finalists[1]} caption="Last CSAR standing wins" />
+        ) : (
+          <VsIntro
+            ms={splash}
+            center="FIGHT!"
+            top={<span className="font-poppins text-7xl font-black text-[#0E2A4D] italic drop-shadow-[4px_4px_0_white] sm:text-9xl">ROUND {round}</span>}
+            bottom={<span className="font-poppins text-4xl font-black text-white italic drop-shadow-[4px_4px_0_#0E2A4D] sm:text-6xl">{game.duels.length} duel{game.duels.length === 1 ? "" : "s"}</span>}
+          />
+        ))}
+      {stage === "answer" ? <AnswerTimer endsAt={endsAt} duration={duration} /> : stage === "read" ? <ReadBar ms={read + (splash > 150 ? 0 : splash)} /> : <div className="h-11" />}
+      <QuestionCard q={game.questions[game.q]} hidden={stage !== "answer"} />
+    </>
+  );
+}
+
+function QuestionCard({ q, hidden = false, reveal = false }: { q: Question; hidden?: boolean; reveal?: boolean }) {
+  return (
+    <section className={`${card} p-5 sm:p-8`}>
+      <h2 className={`text-center font-poppins font-semibold ${hidden ? "animate-pop text-3xl sm:text-5xl" : "text-2xl sm:text-4xl"}`}>{q.text}</h2>
+      {!hidden && (
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          {q.choices.map((c, i) => (
+            <div
+              key={i}
+              className={`flex items-center gap-3 rounded-xl p-4 text-lg font-semibold transition-opacity sm:text-2xl ${tiles[i]} ${
+                reveal ? (i === q.correct ? "animate-pop ring-4 ring-green-500 ring-offset-2" : "opacity-30") : "animate-pop"
+              }`}
+              style={reveal ? undefined : { animationDelay: `${i * 60}ms` }}
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-white/25 text-base">{letters[i]}</span>
+              <span className="min-w-0 break-words">{c}</span>
+              {reveal && i === q.correct && <Check className="ml-auto shrink-0" aria-label="Correct answer" />}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function AnswerTimer({ endsAt, duration }: { endsAt: number; duration: number }) {
@@ -421,36 +455,15 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
         </button>
       </div>
       {reveal ? (
-        <p className="text-center text-sm font-semibold text-[#134687]/60">
-          {isOver(game) ? "Final results in" : "Next round in"} <Countdown key={game.round} ms={RESULT_MS} />…
-        </p>
+        <>
+          <p className="text-center text-sm font-semibold text-[#134687]/60">
+            {isOver(game) ? "Final results in" : "Next round in"} <Countdown key={game.round} ms={RESULT_MS} />…
+          </p>
+          <QuestionCard q={q} reveal />
+        </>
       ) : (
-        <TimerBar
-          key={game.round}
-          endsAt={game.endsAt}
-          duration={game.settings.duration}
-          round={game.round}
-          duels={game.duels.length}
-          finalists={finalists}
-        />
+        <QuestionStage key={game.round} game={game} finalists={finalists} />
       )}
-      <section className={`${card} p-5 sm:p-8`}>
-        <h2 className="text-center font-poppins text-2xl font-semibold sm:text-4xl">{q.text}</h2>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          {q.choices.map((c, i) => (
-            <div
-              key={i}
-              className={`flex items-center gap-3 rounded-xl p-4 text-lg font-semibold transition-opacity sm:text-2xl ${tiles[i]} ${
-                reveal && i !== q.correct ? "opacity-30" : ""
-              } ${reveal && i === q.correct ? "animate-pop ring-4 ring-green-500 ring-offset-2" : ""}`}
-            >
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-white/25 text-base">{letters[i]}</span>
-              <span className="min-w-0 break-words">{c}</span>
-              {reveal && i === q.correct && <Check className="ml-auto shrink-0" aria-label="Correct answer" />}
-            </div>
-          ))}
-        </div>
-      </section>
       <ul className={`grid ${compact ? "grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2" : "grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3"}`}>
         {game.duels.map(([a, b], i) => (
           <DuelCard key={a} game={game} a={a} b={b} result={reveal ? results.get(a) : undefined} onKick={onKick} compact={compact} delay={Math.min(i * 30, 600)} />

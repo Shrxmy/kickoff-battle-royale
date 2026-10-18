@@ -287,3 +287,17 @@ export function Footer() {
     </footer>
   );
 }
+
+// Reading time before the choices appear: an amber bar draining over `ms` and a seconds count.
+export function ReadBar({ ms }: { ms: number }) {
+  return (
+    <div className="flex w-full flex-col items-center gap-2" role="status">
+      <p className="font-poppins text-sm font-semibold sm:text-base">
+        Read the question · answers in <Countdown ms={ms} className="text-lg text-[#CE9823] sm:text-2xl" />
+      </p>
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#FFE7B4]" role="presentation">
+        <div className="timer-bar h-full w-full rounded-full bg-[#FFBC2B]" style={{ "--t": `${ms}ms` } as React.CSSProperties} />
+      </div>
+    </div>
+  );
+}
