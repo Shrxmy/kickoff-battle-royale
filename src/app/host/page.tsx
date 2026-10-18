@@ -78,10 +78,10 @@ export default function HostPage() {
     sent.current.at = Date.now();
   }, []);
 
-  // At most one snapshot per second for lobby churn and rejoin requests.
+  // At most one snapshot every 2s for lobby churn and rejoin requests: with 90 phones that is ~45 msgs/s, leaving headroom.
   const throttled = useCallback(() => {
     if (pending.current !== undefined) return;
-    pending.current = window.setTimeout(broadcast, Math.max(0, sent.current.at + 1000 - Date.now()));
+    pending.current = window.setTimeout(broadcast, Math.max(0, sent.current.at + 2000 - Date.now()));
   }, [broadcast]);
 
   const code = game?.code;

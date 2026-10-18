@@ -12,7 +12,7 @@ cp .env.example .env.local   # fill in the two Supabase values
 pnpm dev
 ```
 
-- **Supabase:** any project works (free tier is fine, about 60 players). On Vercel, add it from *Marketplace → Supabase* and the env vars are set for you. Only Realtime Broadcast is used: no tables, no auth.
+- **Supabase:** any project works (free tier is fine, up to 90 players). On Vercel, add it from *Marketplace → Supabase* and the env vars are set for you. Only Realtime Broadcast is used: no tables, no auth.
 - **No keys?** The app falls back to local test mode: tabs in the same browser talk to each other, phones can't join. Good for rehearsing the question set.
 - **Phones on your LAN in dev:** `pnpm dev -H 0.0.0.0` and open the host page via your LAN IP so the QR points somewhere phones can reach.
 

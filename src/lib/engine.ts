@@ -2,7 +2,7 @@
 // nothing here touches the network or the clock, so it runs under `node --test` as-is.
 
 export const BOT = "bot";
-export const MAX_PLAYERS = 60;
+export const MAX_PLAYERS = 90; // shortcut: Supabase free plan caps 100 msgs/s and each broadcast costs one per phone; Pro (500/s) allows ~400
 export const GRACE_MS = 1500; // REST answers from phones need a moment to arrive
 
 export type Question = { text: string; choices: string[]; correct: number };
@@ -16,6 +16,8 @@ export type Player = {
   answered: number;
   totalMs: number;
   place?: number; // set when eliminated or when the game ends
+  lastFoe?: string; // last round's opponent, so pairing can avoid back-to-back rematches
+  bots?: number; // rounds spent against the bot, so the easy draw rotates
 };
 export type Answer = { choice: number; ms: number };
 export type Duel = [string, string];
@@ -150,10 +152,28 @@ export function leave(g: Game, id: string): Game {
 export const alive = (g: Game) => Object.values(g.players).filter((p) => p.energy > 0);
 export const isOver = (g: Game) => g.phase !== "lobby" && alive(g).length <= 1;
 
-export function pair(ids: string[], rand: Rand = Math.random): Duel[] {
-  const s = shuffle(ids, rand);
+const rematches = (s: string[], lastFoe: Record<string, string | undefined>) => {
+  let n = 0;
+  for (let i = 0; i < s.length; i += 2) if (lastFoe[s[i]] === s[i + 1]) n++;
+  return n;
+};
+
+export function pair(ids: string[], rand: Rand = Math.random, lastFoe: Record<string, string | undefined> = {}, bots: Record<string, number> = {}): Duel[] {
+  let s = shuffle(ids, rand);
   const duels: Duel[] = [];
-  for (let i = 0; i < s.length; i += 2) duels.push([s[i], s[i + 1] ?? BOT]);
+  if (s.length % 2) {
+    // The bot is the easy draw: whoever has faced it least gets it (shuffle order breaks ties).
+    const fewest = Math.min(...s.map((id) => bots[id] ?? 0));
+    const solo = s.find((id) => (bots[id] ?? 0) === fewest)!;
+    s = s.filter((id) => id !== solo);
+    duels.push([solo, BOT]);
+  }
+  // Reshuffle to dodge back-to-back rematches; only 2 players left makes one unavoidable.
+  for (let tries = 0; tries < 30 && rematches(s, lastFoe) > 0; tries++) {
+    const t = shuffle(s, rand);
+    if (rematches(t, lastFoe) < rematches(s, lastFoe)) s = t;
+  }
+  for (let i = 0; i < s.length; i += 2) duels.push([s[i], s[i + 1]]);
   return duels;
 }
 
@@ -165,13 +185,26 @@ export function startRound(g: Game, now: number, rand: Rand = Math.random): Game
     // Don't open the fresh deck with the question that just ended the old one.
     if (g.round > 0 && deck.length > 1 && deck[0] === g.q) deck = [...deck.slice(1), deck[0]];
   }
+  const living = alive(g);
+  const duels = pair(
+    living.map((p) => p.id),
+    rand,
+    Object.fromEntries(living.map((p) => [p.id, p.lastFoe])),
+    Object.fromEntries(living.map((p) => [p.id, p.bots ?? 0])),
+  );
+  const players = { ...g.players };
+  for (const [a, b] of duels) {
+    players[a] = { ...players[a], lastFoe: b, bots: (players[a].bots ?? 0) + (b === BOT ? 1 : 0) };
+    if (b !== BOT) players[b] = { ...players[b], lastFoe: a };
+  }
   return {
     ...g,
     phase: "question",
     round: g.round + 1,
     q: deck[0],
     deck: deck.slice(1),
-    duels: pair(alive(g).map((p) => p.id), rand),
+    duels,
+    players,
     answers: {},
     results: [],
     endsAt: now + g.settings.duration * 1000 + GRACE_MS,

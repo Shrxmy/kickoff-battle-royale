@@ -30,6 +30,25 @@ test("pairing gives the odd player the bot", () => {
   assert.equal(duels.flat().filter((id) => id === BOT).length, 1);
 });
 
+test("pairing is fair: the bot rotates and nobody faces the same opponent twice in a row", () => {
+  for (let trial = 0; trial < 200; trial++) {
+    // 5 players with plenty of energy and all-draw rounds, so the field stays the same.
+    let g = lobby(5, 10);
+    let prev: string[] = [];
+    for (let r = 0; r < 10; r++) {
+      g = startRound(g, 0);
+      const humans = g.duels.filter(([, b]) => b !== BOT).map((d) => [...d].sort().join());
+      assert.ok(humans.every((d) => !prev.includes(d)), "no back-to-back rematch");
+      prev = humans;
+      const bots = Object.values(g.players).map((p) => p.bots ?? 0);
+      assert.ok(Math.max(...bots) - Math.min(...bots) <= 1, "bot duels stay spread evenly");
+      g = { ...g, phase: "result" };
+    }
+  }
+  // Two players left can only face each other.
+  assert.deepEqual(pair(["a", "b"], Math.random, { a: "b", b: "a" }).flat().sort(), ["a", "b"]);
+});
+
 test("join is lobby-only, trims names, caps players", () => {
   let g = lobby(MAX_PLAYERS);
   assert.equal(Object.keys(join(g, { id: "x", name: "X", avatar: "A" }).players).length, MAX_PLAYERS);
