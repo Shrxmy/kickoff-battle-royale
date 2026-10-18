@@ -3,17 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Crown, Play, Users, X } from "lucide-react";
 import {
-  BOT, GRACE_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, newGame, publicView, rank, startRound,
+  BOT, GRACE_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
   type DuelResult, type Game, type PlayerMsg, type Settings,
 } from "@/lib/engine";
 import { inboxName, localOnly, roomName, subscribe, type Status } from "@/lib/realtime";
-import { Avatar, Brand, Energy, TitlePill } from "@/components/game";
+import { Avatar, Brand, Confetti, Countdown, Energy, TitlePill } from "@/components/game";
 import { JoinQR } from "@/components/JoinQR";
 import { QuestionEditor, SAMPLE, questionsOf } from "@/components/QuestionEditor";
 import { card, cta, danger, focus, letters, pill, secondary, tiles } from "@/components/ui";
 
 const GAME_KEY = "br-host-game";
-const TEXT_KEY = "br-host-questions";
+const TEXT_KEY = "br-host-questions-v2"; // bumped so hosts with the old saved sample get the kickoff set
 const SETTINGS_KEY = "br-host-settings";
 const RESULT_MS = 5000;
 
@@ -98,6 +98,8 @@ export default function HostPage() {
         throttled(); // a refreshed phone needs the current snapshot
       } else if (m?.t === "answer") {
         setGame((g) => g && answer(g, m, Date.now()));
+      } else if (m?.t === "leave") {
+        setGame((g) => g && leave(g, m.id));
       }
     }, setInboxStatus);
     return () => {
@@ -111,7 +113,8 @@ export default function HostPage() {
 
   useEffect(() => {
     if (!game) return;
-    const key = `${game.code}:${game.phase}:${game.round}`;
+    // A removal changes the key too, so the removed phone hears about it right away.
+    const key = `${game.code}:${game.phase}:${game.round}:${game.kicked?.length ?? 0}`;
     if (key !== sent.current.key) {
       sent.current.key = key;
       broadcast();
@@ -160,6 +163,10 @@ export default function HostPage() {
   if (!ready) return null;
 
   const live = roomStatus === "live" && inboxStatus === "live";
+  const onKick = (id: string) => {
+    const name = game?.players[id]?.name;
+    if (name && confirm(`Remove ${name} from the game?`)) setGame((g) => g && kick(g, id));
+  };
   const joinUrl = game ? `${origin}/?code=${game.code}` : "";
   const status = game && (
     <span className={`${pill} ${live && !localOnly ? "bg-green-50 text-green-800" : "bg-[#FFF8E7] text-[#8A5A00]"}`} role="status">
@@ -184,13 +191,13 @@ export default function HostPage() {
           <Lobby
             game={game}
             joinUrl={joinUrl}
-            onKick={(id) => setGame((g) => g && kick(g, id))}
+            onKick={onKick}
             onStart={() => setGame((g) => g && startRound(g, Date.now()))}
             onCancel={() => setGame(null)}
           />
         )}
         {(game?.phase === "question" || game?.phase === "result") && (
-          <Round game={game} joinUrl={joinUrl} onEnd={() => confirm("End the game now?") && setGame((g) => g && end(g))} />
+          <Round game={game} joinUrl={joinUrl} onKick={onKick} onEnd={() => confirm("End the game now?") && setGame((g) => g && end(g))} />
         )}
         {game?.phase === "end" && <Podium game={game} onNew={() => setGame(null)} />}
       </main>
@@ -289,14 +296,7 @@ function Lobby({ game, joinUrl, onKick, onStart, onCancel }: {
               <li key={p.id} className="group relative flex animate-pop flex-col items-center gap-1 rounded-xl bg-[#F3F8FF] p-3">
                 <Avatar id={p.avatar} size={64} />
                 <span className="w-full truncate text-center text-sm font-semibold">{p.name}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${p.name}`}
-                  onClick={() => onKick(p.id)}
-                  className={`absolute top-1 right-1 rounded-full bg-white p-1 text-red-700 opacity-0 shadow transition-opacity group-hover:opacity-100 focus-visible:opacity-100 ${focus}`}
-                >
-                  <X size={14} aria-hidden />
-                </button>
+                <RemoveButton name={p.name} onClick={() => onKick(p.id)} />
               </li>
             ))}
           </ul>
@@ -306,36 +306,65 @@ function Lobby({ game, joinUrl, onKick, onStart, onCancel }: {
   );
 }
 
+// Hidden until hover on a mouse; always visible on touchscreens, which have no hover.
+function RemoveButton({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={`Remove ${name}`}
+      title={`Remove ${name}`}
+      onClick={onClick}
+      className={`absolute top-1 right-1 rounded-full bg-white p-1 text-red-700 opacity-0 shadow transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 ${focus}`}
+    >
+      <X size={14} aria-hidden />
+    </button>
+  );
+}
+
 function TimerBar({ endsAt, duration }: { endsAt: number; duration: number }) {
   const [left] = useState(() => Math.max(0, endsAt - GRACE_MS - Date.now()));
   return (
-    <div className="h-3 w-full overflow-hidden rounded-full bg-[#E8F2FF]" role="presentation">
-      <div
-        className="timer-bar h-full rounded-full bg-[linear-gradient(90deg,#2F7EE3,#0349A2)]"
-        style={{ "--t": `${left}ms`, width: `${(left / (duration * 1000)) * 100}%` } as React.CSSProperties}
-      />
+    <div className="flex items-center gap-3">
+      <div className="h-3 w-full overflow-hidden rounded-full bg-[#E8F2FF]" role="presentation">
+        <div
+          className="timer-bar h-full rounded-full bg-[linear-gradient(90deg,#2F7EE3,#0349A2)]"
+          style={{ "--t": `${left}ms`, width: `${(left / (duration * 1000)) * 100}%` } as React.CSSProperties}
+        />
+      </div>
+      <Countdown ms={left} className="w-10 text-right font-poppins text-2xl font-bold" />
     </div>
   );
 }
 
-function Round({ game, joinUrl, onEnd }: { game: Game; joinUrl: string; onEnd: () => void }) {
+function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; onKick: (id: string) => void; onEnd: () => void }) {
   const q = game.questions[game.q];
   const reveal = game.phase === "result";
   const left = alive(game).length;
   const results = new Map(game.results.map((r) => [r.a, r]));
+  const dueling = game.duels.flat().filter((id) => id !== BOT && !game.kicked?.includes(id));
+  const answered = dueling.filter((id) => Object.hasOwn(game.answers, id)).length;
   return (
     <div className="flex flex-1 flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className={`${pill} bg-[#134687] px-4 py-1.5 text-sm text-white`}>Round {game.round}</span>
-        <span className="flex items-center gap-2 font-semibold">
-          <Users size={18} aria-hidden /> {left} of {Object.keys(game.players).length} still in
+        <span className="flex items-center gap-4 font-semibold">
+          <span className="flex items-center gap-2">
+            <Users size={18} aria-hidden /> {left} of {rank(game).length} still in
+          </span>
+          {!reveal && (
+            <span className={`${pill} bg-[#E8F2FF] text-[#134687]`}>
+              <Check size={16} aria-hidden /> {answered}/{dueling.length} answered
+            </span>
+          )}
         </span>
         <button type="button" className={danger} onClick={onEnd}>
           End game
         </button>
       </div>
       {reveal ? (
-        <p className="text-center text-sm font-semibold text-[#134687]/60">Next round in a moment…</p>
+        <p className="text-center text-sm font-semibold text-[#134687]/60">
+          {isOver(game) ? "Final results in" : "Next round in"} <Countdown key={game.round} ms={RESULT_MS} />…
+        </p>
       ) : (
         <TimerBar key={game.round} endsAt={game.endsAt} duration={game.settings.duration} />
       )}
@@ -358,7 +387,7 @@ function Round({ game, joinUrl, onEnd }: { game: Game; joinUrl: string; onEnd: (
       </section>
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
         {game.duels.map(([a, b]) => (
-          <DuelCard key={a} game={game} a={a} b={b} result={reveal ? results.get(a) : undefined} />
+          <DuelCard key={a} game={game} a={a} b={b} result={reveal ? results.get(a) : undefined} onKick={onKick} />
         ))}
       </ul>
       <div className="fixed right-4 bottom-4 hidden flex-col items-center gap-1 rounded-xl bg-white p-2 shadow-md lg:flex">
@@ -369,13 +398,15 @@ function Round({ game, joinUrl, onEnd }: { game: Game; joinUrl: string; onEnd: (
   );
 }
 
-function DuelCard({ game, a, b, result }: { game: Game; a: string; b: string; result?: DuelResult }) {
+function DuelCard({ game, a, b, result, onKick }: { game: Game; a: string; b: string; result?: DuelResult; onKick: (id: string) => void }) {
   const side = (id: string) => {
     const p = game.players[id];
+    const out = !!game.kicked?.includes(id);
     const won = result?.winner === id;
     const lost = !!result?.winner && !won;
     return (
-      <div className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl p-2 ${won ? "bg-green-50 ring-2 ring-green-500" : ""} ${lost ? "animate-shake" : ""}`}>
+      <div className={`group relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl p-2 ${won ? "bg-green-50 ring-2 ring-green-500" : ""} ${lost && !out ? "animate-shake" : ""}`}>
+        {id !== BOT && !out && <RemoveButton name={p.name} onClick={() => onKick(id)} />}
         <div className="relative">
           <Avatar id={id === BOT ? BOT : p.avatar} size={56} className={p && p.energy === 0 ? "grayscale" : ""} />
           {won && <Crown size={20} className="absolute -top-2 -right-2 fill-[#FFBC2B] text-[#CE9823]" aria-label="Winner" />}
@@ -384,7 +415,13 @@ function DuelCard({ game, a, b, result }: { game: Game; a: string; b: string; re
           )}
         </div>
         <span className="w-full truncate text-center text-sm font-semibold">{id === BOT ? "CSAR Bot" : p.name}</span>
-        {id === BOT ? <Energy value={-1} /> : <Energy key={`${game.round}${!!result}`} value={p.energy} lost={lost ? 1 : 0} size={14} />}
+        {id === BOT ? (
+          <Energy value={-1} />
+        ) : out ? (
+          <span className="text-xs font-semibold text-red-700">Removed</span>
+        ) : (
+          <Energy key={`${game.round}${!!result}`} value={p.energy} lost={lost ? 1 : 0} size={14} />
+        )}
       </div>
     );
   };
@@ -403,6 +440,7 @@ function Podium({ game, onNew }: { game: Game; onNew: () => void }) {
   const heights = ["h-28", "h-40", "h-20"];
   return (
     <div className="flex flex-col items-center gap-8">
+      <Confetti />
       <TitlePill>Battle Royale Champions</TitlePill>
       <div className="flex items-end justify-center gap-3 sm:gap-6">
         {top.map((p, i) =>

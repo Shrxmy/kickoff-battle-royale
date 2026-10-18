@@ -35,21 +35,23 @@ export type Game = {
   answers: Record<string, Answer>;
   endsAt: number;
   results: DuelResult[];
-  kicked?: string[]; // kicked phones keep retrying join; remember them for this game
+  kicked?: string[]; // removed by the host or left mid-game: can't rejoin, left off the ranking
 };
 
 type Rand = () => number;
 
-// Messages the host broadcasts. `players` maps id -> [name, avatar, energy].
+// Messages the host broadcasts. `players` maps id -> [name, avatar, energy]; `out` lists removed phones.
 export type PlayerMap = Record<string, [string, string, number]>;
-export type HostMsg =
+export type HostMsg = (
   | { t: "lobby"; players: [string, string, string][] }
   | { t: "round"; n: number; q: { text: string; choices: string[] }; duration: number; left: number; duels: Duel[]; players: PlayerMap }
   | { t: "result"; n: number; q: { text: string; choices: string[] }; correct: number; results: DuelResult[]; players: PlayerMap }
-  | { t: "end"; ranking: { id: string; name: string; avatar: string; energy: number; place: number; correct: number }[] };
+  | { t: "end"; ranking: { id: string; name: string; avatar: string; energy: number; place: number; correct: number }[] }
+) & { out: string[] };
 export type PlayerMsg =
   | { t: "join"; id: string; name: string; avatar: string }
-  | { t: "answer"; id: string; n: number; choice: number; ms: number };
+  | { t: "answer"; id: string; n: number; choice: number; ms: number }
+  | { t: "leave"; id: string };
 
 // Throws a readable error for anything a phone couldn't play.
 export function checkQuestion(raw: unknown): Question {
@@ -111,11 +113,38 @@ export function join(g: Game, p: { id: string; name: string; avatar: string }): 
   return { ...g, players: { ...g.players, [p.id]: player } };
 }
 
-export function kick(g: Game, id: string): Game {
-  if (g.phase !== "lobby") return g;
+const isOut = (g: Game, id: string) => !!g.kicked?.includes(id);
+
+function drop(g: Game, id: string): Game {
   const players = { ...g.players };
   delete players[id];
-  return { ...g, players, kicked: [...(g.kicked ?? []), id] };
+  return { ...g, players };
+}
+
+// Lobby: gone, and the phone can't rejoin. Mid-game: out on the spot, their answer is void
+// (the duel plays on without them), and they're left off the ranking.
+export function kick(g: Game, id: string): Game {
+  if (typeof id !== "string" || !Object.hasOwn(g.players, id) || isOut(g, id) || g.phase === "end") return g;
+  const kicked = [...(g.kicked ?? []), id];
+  if (g.phase === "lobby") return { ...drop(g, id), kicked };
+  const gone = g.players[id];
+  const players: Record<string, Player> = {};
+  // Everyone placed behind them moves up one, so places stay gap-free (ties stay tied).
+  for (const p of Object.values(g.players)) {
+    players[p.id] = p.place !== undefined && p.place > (gone.place ?? 0) ? { ...p, place: p.place - 1 } : p;
+  }
+  players[id] = { ...gone, energy: 0, place: undefined };
+  const answers = { ...g.answers };
+  delete answers[id];
+  return { ...g, players, answers, kicked };
+}
+
+// A phone tapping Leave: free to come back while in the lobby, removed once the game is on,
+// but a phone already knocked out keeps the place it earned.
+export function leave(g: Game, id: string): Game {
+  if (typeof id !== "string" || !Object.hasOwn(g.players, id)) return g;
+  if (g.phase === "lobby") return drop(g, id);
+  return g.players[id].energy > 0 ? kick(g, id) : g;
 }
 
 export const alive = (g: Game) => Object.values(g.players).filter((p) => p.energy > 0);
@@ -148,14 +177,15 @@ const inDuel = (g: Game, id: string) => g.duels.some((d) => d.includes(id));
 // `now` is the host clock: anything after the grace deadline is too late, even if the timer fired late.
 export function answer(g: Game, a: { id: string; n: number; choice: number; ms: number }, now: number): Game {
   const q = g.questions[g.q];
-  if (g.phase !== "question" || now > g.endsAt || a?.n !== g.round || typeof a.id !== "string" || a.id === BOT) return g;
+  if (g.phase !== "question" || now > g.endsAt || a?.n !== g.round || typeof a.id !== "string" || a.id === BOT || isOut(g, a.id)) return g;
   if (Object.hasOwn(g.answers, a.id) || !inDuel(g, a.id)) return g;
   if (!Number.isInteger(a.choice) || a.choice < 0 || a.choice >= q.choices.length) return g;
   const ms = Math.min(Math.max(Number(a.ms) || 0, 0), g.settings.duration * 1000);
   return { ...g, answers: { ...g.answers, [a.id]: { choice: a.choice, ms } } };
 }
 
-export const allAnswered = (g: Game) => g.duels.flat().every((id) => id === BOT || g.answers[id]);
+// Removed players will never answer, so the round doesn't wait for them.
+export const allAnswered = (g: Game) => g.duels.flat().every((id) => id === BOT || Object.hasOwn(g.answers, id) || isOut(g, id));
 
 // Returns which side won: 0 (a), 1 (b) or null for a draw.
 export function resolveDuel(a: Answer | undefined, b: Answer | undefined, correct: number): 0 | 1 | null {
@@ -193,7 +223,7 @@ export function finishRound(g: Game, rand: Rand = Math.random): Game {
         p.totalMs += ans.ms;
         if (ans.choice === q.correct) p.correct++;
       }
-      if (winner && winner !== id) {
+      if (winner && winner !== id && p.energy > 0) {
         p.energy = Math.max(0, p.energy - 1);
         if (p.energy === 0) out.push(id);
       }
@@ -209,7 +239,7 @@ export function finishRound(g: Game, rand: Rand = Math.random): Game {
 const avgMs = (p: Player) => (p.answered ? p.totalMs / p.answered : Infinity);
 
 export function rank(g: Game): Player[] {
-  return Object.values(g.players).sort(
+  return Object.values(g.players).filter((p) => !isOut(g, p.id)).sort(
     (x, y) =>
       y.energy - x.energy ||
       (x.place ?? 0) - (y.place ?? 0) ||
@@ -235,12 +265,14 @@ function playerMap(g: Game): PlayerMap {
 export function publicView(g: Game, now: number): HostMsg {
   const q = g.questions[g.q];
   const view = q && { text: q.text, choices: q.choices };
+  const out = g.kicked ?? [];
   switch (g.phase) {
     case "lobby":
-      return { t: "lobby", players: Object.values(g.players).map((p) => [p.id, p.name, p.avatar]) };
+      return { t: "lobby", out, players: Object.values(g.players).map((p) => [p.id, p.name, p.avatar]) };
     case "question":
       return {
         t: "round",
+        out,
         n: g.round,
         q: view,
         duration: g.settings.duration,
@@ -249,10 +281,11 @@ export function publicView(g: Game, now: number): HostMsg {
         players: playerMap(g),
       };
     case "result":
-      return { t: "result", n: g.round, q: view, correct: q.correct, results: g.results, players: playerMap(g) };
+      return { t: "result", out, n: g.round, q: view, correct: q.correct, results: g.results, players: playerMap(g) };
     case "end":
       return {
         t: "end",
+        out,
         ranking: rank(g).map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, energy: p.energy, place: p.place ?? 0, correct: p.correct })),
       };
   }

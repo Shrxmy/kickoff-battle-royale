@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  BOT, MAX_PLAYERS, answer, allAnswered, end, finishRound, isOver, join, kick, newGame, pair, parseQuestions, publicView, rank, resolveDuel, startRound,
+  BOT, MAX_PLAYERS, alive, answer, allAnswered, end, finishRound, isOver, join, kick, leave, newGame, pair, parseQuestions, publicView, rank, resolveDuel, startRound,
   type Game,
 } from "./engine.ts";
 
@@ -106,6 +106,64 @@ test("draws cost nothing; same-round knockouts share a place; someone always sur
   assert.deepEqual(places, [3, 3]);
   g = end(g);
   assert.deepEqual(Object.values(g.players).map((p) => p.place).sort(), [1, 2, 3, 3], "end() keeps shared places");
+});
+
+test("removing players: lobby kicks ban, leaves don't, mid-game removal knocks out and unranks", () => {
+  let g = lobby(3);
+  assert.equal(kick(g, "nobody"), g, "unknown id");
+  g = leave(g, "p2");
+  assert.ok(!g.players.p2);
+  assert.ok(join(g, { id: "p2", name: "P2", avatar: "A" }).players.p2, "a phone that left can come back");
+  assert.deepEqual(publicView(kick(g, "p1"), 0).out, ["p1"], "phones learn they were removed");
+
+  g = startRound(lobby(4, 3), 0, seq(0.5));
+  const [a, b] = g.duels[0];
+  g = kick(g, a);
+  assert.equal(g.players[a].energy, 0);
+  assert.equal(kick(g, a), g, "removing twice is a no-op");
+  assert.equal(answer(g, { id: a, n: g.round, choice: 1, ms: 1 }, 0), g, "removed players can't answer");
+  for (const id of g.duels.flat()) if (id !== a) g = answer(g, { id, n: g.round, choice: 1, ms: 1 }, 0);
+  assert.equal(allAnswered(g), true, "the round doesn't wait for a removed player");
+  g = finishRound(g);
+  assert.equal(g.players[a].place, undefined, "no place for the removed player");
+  assert.equal(g.players[b].energy, 3, "their opponent wins the duel");
+  assert.equal(leave(g, a), g, "a removed player leaving changes nothing");
+  g = leave(g, "p0" === a ? "p1" : "p0");
+  g = end(g);
+  assert.ok(rank(g).every((p) => !g.kicked!.includes(p.id)), "removed players are off the ranking");
+  assert.deepEqual(rank(g).map((p) => p.place), [1, 2]);
+});
+
+test("a removed player's answer no longer decides the duel", () => {
+  let g = startRound(lobby(2, 3), 0);
+  const [a, b] = g.duels[0];
+  g = answer(g, { id: a, n: 1, choice: 1, ms: 1 }, 0);
+  g = answer(g, { id: b, n: 1, choice: 1, ms: 900 }, 0);
+  g = finishRound(kick(g, a));
+  assert.equal(g.results[0].winner, b);
+  assert.equal(g.players[b].energy, 3);
+});
+
+test("removals keep places gap-free; the host can remove knocked-out players, Leave can't", () => {
+  // 5 players, 1 energy: two duels knock out two players (shared 4th), p? sits with the bot.
+  let g = startRound(lobby(5, 1), 0, seq(0.5));
+  for (const [x, y] of g.duels) {
+    if (y === BOT) continue;
+    g = answer(g, { id: x, n: 1, choice: 1, ms: 1 }, 0);
+    g = answer(g, { id: y, n: 1, choice: 0, ms: 1 }, 0);
+  }
+  g = finishRound(g, seq(0.99)); // bot answers wrong
+  const outs = Object.values(g.players).filter((p) => p.energy === 0);
+  assert.deepEqual(outs.map((p) => p.place), [4, 4]);
+  assert.equal(leave(g, outs[0].id), g, "a knocked-out phone leaving keeps its place");
+
+  const survivor = alive(g)[0].id;
+  g = kick(g, survivor);
+  assert.deepEqual(Object.values(g.players).filter((p) => p.place).map((p) => p.place), [3, 3], "everyone behind moves up");
+  g = kick(g, outs[0].id);
+  assert.ok(g.kicked!.includes(outs[0].id), "the host can still remove a knocked-out player");
+  g = end(g);
+  assert.deepEqual(rank(g).map((p) => p.place), [1, 2, 3]);
 });
 
 test("parses pasted text and JSON question sets", () => {

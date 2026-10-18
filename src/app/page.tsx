@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Crown, LogOut } from "lucide-react";
 import { BOT, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
 import { inboxName, post, roomName, subscribe, type Status } from "@/lib/realtime";
-import { AVATARS, Avatar, Brand, Energy, TitlePill } from "@/components/game";
+import { AVATARS, Avatar, Brand, Confetti, Countdown, Energy, TitlePill } from "@/components/game";
 import { card, cta, focus, input, letters, pill, tiles } from "@/components/ui";
 
 type Me = { code: string; id: string; name: string; avatar: string };
@@ -46,6 +46,8 @@ export default function PlayPage() {
   }
 
   function leave() {
+    // Tell the host so we don't linger in the lobby or keep getting paired.
+    if (me) post(inboxName(me.code), { t: "leave", id: me.id } satisfies PlayerMsg).catch(() => {});
     try {
       sessionStorage.removeItem(ME_KEY);
     } catch {}
@@ -60,14 +62,14 @@ export default function PlayPage() {
       <Brand
         right={
           me && (
-            <button type="button" onClick={leave} className={`flex items-center gap-1 rounded-lg px-2 py-1 text-sm font-semibold ${focus}`}>
+            <button type="button" onClick={() => confirm("Leave this game?") && leave()} className={`flex items-center gap-1 rounded-lg px-2 py-1 text-sm font-semibold ${focus}`}>
               <LogOut size={16} aria-hidden /> Leave
             </button>
           )
         }
       />
       <main className="mx-auto flex w-full max-w-lg flex-1 flex-col gap-5 p-4">
-        {me ? <Game me={me} /> : <JoinForm draft={draft} setDraft={setDraft} onEnter={enter} />}
+        {me ? <Game me={me} onLeave={leave} /> : <JoinForm draft={draft} setDraft={setDraft} onEnter={enter} />}
       </main>
     </div>
   );
@@ -148,16 +150,20 @@ function JoinForm({ draft, setDraft, onEnter }: {
   );
 }
 
-// Re-sent snapshots for the same round must not restart the timer or replay animations.
+// Re-sent snapshots for the same round (rejoins, removals) update the data but keep the
+// first `left`, so the answer timer and the measured answer time don't restart.
 function accept(prev: HostMsg | null, next: HostMsg): HostMsg {
-  if (prev && "n" in prev && "n" in next && prev.t === next.t && prev.n === next.n) return prev;
+  if (prev?.t === "round" && next.t === "round" && prev.n === next.n) return { ...next, left: prev.left };
   return next;
 }
 
-function Game({ me }: { me: Me }) {
+const buzz = (pattern: number | number[]) => navigator.vibrate?.(pattern);
+
+function Game({ me, onLeave }: { me: Me; onLeave: () => void }) {
   const [msg, setMsg] = useState<HostMsg | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
-  const joined = !!msg && (msg.t !== "lobby" || msg.players.some(([id]) => id === me.id));
+  const removed = !!msg?.out?.includes(me.id);
+  const joined = removed || (!!msg && (msg.t !== "lobby" || msg.players.some(([id]) => id === me.id)));
   const joinedRef = useRef(joined);
 
   useEffect(() => {
@@ -186,8 +192,14 @@ function Game({ me }: { me: Me }) {
           {status === "offline" ? "Offline, reconnecting…" : "Connecting…"}
         </p>
       )}
-      {!msg || msg.t === "lobby" ? (
-        <Waiting me={me} joined={joined} count={msg?.t === "lobby" ? msg.players.length : 0} />
+      {removed ? (
+        <Notice title="Removed by the host" text="You're no longer in this game." img="sad">
+          <button type="button" className={`${cta} mt-2`} onClick={onLeave}>
+            Join another game
+          </button>
+        </Notice>
+      ) : !msg || msg.t === "lobby" ? (
+        <Waiting me={me} joined={joined} players={msg?.t === "lobby" ? msg.players : []} />
       ) : msg.t === "end" ? (
         <End me={me} msg={msg} />
       ) : !msg.players[me.id] ? (
@@ -201,17 +213,20 @@ function Game({ me }: { me: Me }) {
   );
 }
 
-function Notice({ title, text, img = "bot" }: { title: string; text: string; img?: string }) {
+function Notice({ title, text, img = "bot", children }: { title: string; text: string; img?: string; children?: React.ReactNode }) {
   return (
     <div className={`${card} flex animate-pop flex-col items-center gap-3 p-6 text-center`}>
       <Image src={`/csar/${img}.webp`} alt="" width={120} height={120} />
       <h2 className="font-poppins text-2xl font-semibold">{title}</h2>
       <p className="text-[#134687]/70">{text}</p>
+      {children}
     </div>
   );
 }
 
-function Waiting({ me, joined, count }: { me: Me; joined: boolean; count: number }) {
+function Waiting({ me, joined, players }: { me: Me; joined: boolean; players: [string, string, string][] }) {
+  const count = players.length;
+  const others = players.filter(([id]) => id !== me.id);
   return (
     <div className={`${card} flex animate-pop flex-col items-center gap-3 p-6 text-center`}>
       <Avatar id={me.avatar} size={120} className={joined ? "animate-pop" : "opacity-50"} />
@@ -220,6 +235,20 @@ function Waiting({ me, joined, count }: { me: Me; joined: boolean; count: number
       <p className="text-sm text-[#134687]/70">
         {joined ? `${count} player${count === 1 ? "" : "s"} in the lobby. Eyes on the big screen!` : `Game ${me.code}. Make sure the host has the lobby open.`}
       </p>
+      {joined && others.length > 0 && (
+        <ul className="mt-1 flex flex-wrap justify-center -space-x-2" aria-label="Other players">
+          {others.slice(-12).map(([id, name, avatar]) => (
+            <li key={id} title={name} className="animate-pop rounded-full bg-[#F3F8FF] p-0.5 ring-2 ring-white">
+              <Avatar id={avatar} size={32} />
+            </li>
+          ))}
+          {others.length > 12 && (
+            <li className="grid size-9 place-items-center rounded-full bg-[#134687] text-xs font-semibold text-white ring-2 ring-white">
+              +{others.length - 12}
+            </li>
+          )}
+        </ul>
+      )}
     </div>
   );
 }
@@ -265,6 +294,7 @@ function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }
     if (picked !== null || timeUp) return;
     const ms = Math.round(performance.now() - shownAt.current);
     setPicked(choice);
+    buzz(15);
     const a: PlayerMsg = { t: "answer", id: me.id, n: msg.n, choice, ms };
     // One retry covers a dropped request; the host ignores duplicates.
     if (!(await post(inboxName(me.code), a).catch(() => false))) post(inboxName(me.code), a).catch(() => {});
@@ -281,6 +311,12 @@ function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }
 
   return (
     <div className="flex flex-1 flex-col gap-4">
+      <div className="flex items-center justify-between text-xs font-semibold text-[#134687]/60">
+        <span>Round {msg.n}</span>
+        <span className="flex items-center gap-1">
+          <Countdown ms={msg.left} className="font-poppins text-base text-[#134687]" />s left
+        </span>
+      </div>
       <Duelists me={me.id} opp={opp} players={msg.players} />
       <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#E8F2FF]" role="presentation">
         <div
@@ -316,6 +352,10 @@ function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }
 function Result({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "result" }> }) {
   const r = msg.results.find((x) => x.a === me.id || x.b === me.id);
   const energy = msg.players[me.id][2];
+  const verdict = !r || r.winner === null ? null : r.winner === me.id;
+  useEffect(() => {
+    if (verdict !== null) buzz(verdict ? [30, 60, 30] : 250);
+  }, [verdict]);
   if (!r) {
     return energy > 0 ? (
       <Notice title="Round over" text="Get ready for the next one." />
@@ -346,6 +386,7 @@ function End({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "end" }> }) {
   const mine = msg.ranking.find((p) => p.id === me.id);
   return (
     <div className="flex flex-col gap-4">
+      {mine?.place === 1 && <Confetti />}
       {mine && (
         <div className={`${card} flex animate-pop flex-col items-center gap-2 p-6 text-center`}>
           <Avatar id={mine.avatar} size={110} />

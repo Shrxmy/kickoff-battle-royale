@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { useEffect, useState } from "react";
 import { Zap } from "lucide-react";
 import { titlePill } from "./ui";
 
@@ -49,6 +50,52 @@ export function Brand({ right }: { right?: React.ReactNode }) {
       </div>
       {right}
     </header>
+  );
+}
+
+// Whole seconds left, counting down from `ms` at mount. Remount (key) to restart.
+export function Countdown({ ms, className = "" }: { ms: number; className?: string }) {
+  const [end] = useState(() => Date.now() + ms);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  return <span className={`tabular-nums ${className}`}>{Math.max(0, Math.ceil((end - now) / 1000))}</span>;
+}
+
+const CONFETTI = ["#2F7EE3", "#134687", "#FFBC2B", "#0077FF", "#CE9823"];
+
+// One CSS-only burst; reduced-motion users get none (the global rule ends it instantly off-screen).
+export function Confetti({ count = 70 }: { count?: number }) {
+  const [bits] = useState(() =>
+    Array.from({ length: count }, (_, i) => ({
+      left: Math.random() * 100,
+      delay: Math.random() * 1.2,
+      duration: 2.6 + Math.random() * 2,
+      size: 6 + Math.random() * 7,
+      spin: 360 + Math.random() * 720,
+      color: CONFETTI[i % CONFETTI.length],
+    })),
+  );
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden" aria-hidden>
+      {bits.map((b, i) => (
+        <span
+          key={i}
+          className="confetti absolute top-0 block rounded-[2px]"
+          style={{
+            left: `${b.left}%`,
+            width: b.size,
+            height: b.size * 0.45,
+            background: b.color,
+            animationDelay: `${b.delay}s`,
+            animationDuration: `${b.duration}s`,
+            "--spin": `${b.spin}deg`,
+          } as React.CSSProperties}
+        />
+      ))}
+    </div>
   );
 }
 

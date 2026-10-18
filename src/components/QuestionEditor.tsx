@@ -5,53 +5,125 @@ import { Download, Upload } from "lucide-react";
 import { parseQuestions, type Question } from "@/lib/engine";
 import { card, input, letters, secondary } from "./ui";
 
-export const SAMPLE = `What does CPU stand for?
-* Central Processing Unit
-Computer Personal Unit
-Central Program Utility
-Core Processing Unit
+export const SAMPLE = `What programming symbol inspired the stylized 'C' in the CSS logo?
+Parenthesis
+Angle Bracket
+Square Bracket
+* Open Curly Brace
 
-Which data structure is First-In, First-Out?
-Stack
-* Queue
-Tree
-Graph
+Which of these sounds made up but is actually listed as a suggested CSS special role?
+CSS Meme Administrator
+CSS Head of Vibes
+* CSS Dance Troupe Captain
+CSS Chief Debugging Officer
 
-What is 1010 in binary as a decimal number?
-8
-12
-* 10
-5
+In what year was Computer Science Society established?
+2011
+1998
+* 2008
+2021
 
-Which language runs natively in web browsers?
-Python
-* JavaScript
-C++
-Java
+Which CS Week event is also scheduled alongside the General Assembly?
+CSSprint
+OlympiCSS
+Kickoff
+* CS Night
 
-What does HTML stand for?
-* HyperText Markup Language
-High Tech Modern Language
-Hyperlink Text Machine Language
-Home Tool Markup Language
+Who is the Auditor of Computer Science Society?
+* Nikolas Josef Dalisay
+Jysrael Jan Coleen Bacinillo
+Matthew Benedict Aquino
+Delph Xander Mogro
 
-Big-O of binary search on a sorted array?
-O(n)
-O(n log n)
-* O(log n)
-O(1)
+What year did the College of Science Introduce the BS Mathematics major in Computer Science Program?
+1989
+* 1984
+2014
+1611
 
-Who is known as the first computer programmer?
-Alan Turing
-* Ada Lovelace
-Grace Hopper
-Charles Babbage
+What is CSS' Motto?
+It's Always Day One at CSS
+* Say Yes To CSS
+Once CSS, Always CSS
+Think CSS
 
-Which of these is NOT a programming paradigm?
-Functional
-Object-oriented
-* Hypertextual
-Procedural`;
+Who is the patron saint of CICS?
+St. Thomas Aquinas
+* St. Vincent Ferrer
+St. Thomas More
+St. Dominic de Guzman
+
+What is the middle name of the President of CSS?
+* Tumabing
+Gumban
+Gordon
+Buizon
+
+Who are the iconic duo-advisers of CSS for this Academic Year 2026-2027?
+* Asst. Prof. Cherry Rose R. Estabillo and Asst. Prof. Charmaine S. Ponay
+Asst. Prof. Jonathan B. Cabero and Prof. Donata D. Acula
+Prof. Donata D. Acula and Asst. Prof. Charmaine S. Ponay
+Asst. Prof. Darlene D. Alberto and Asst. Prof. Cecil Jose A. Delfinado
+
+What was UST originally called? (Final boss spelling check!)
+Colegio de San Ignacio
+* Colegio de Nuestra Señora del Santísimo Rosario
+Real Colegio de Manila
+Universidad de Santo Rosario
+
+Before finding its home in computing, which college originally housed the Computer Science program?
+Faculty of Engineering
+* College of Science
+College of Education
+College of Commerce and Business Administration
+
+What does the sky-blue color of the CSS logo represent?
+The color of our favorite IDE (VS Code)
+The UST swimming pool
+* Open-mindedness and imagination
+The number of pending tasks
+
+Who is the Internal Vice President of CSS this A.Y.?
+* Marian Therese Pineza
+Nigel Roland Anunciacion
+Cc Hermoso
+Cedrick James Eusebio
+
+Which of these is the CORRECT year-level representative lineup, from 1st to 4th year?
+* Zander → Alex → Cyprus → Matthew
+Alex → Zander → Matthew → Cyprus
+Zander → Cyprus → Alex → Matthew
+Matthew → Cyprus → Alex → Zander
+
+Which officer serves as the CSS Chief of Staff?
+Marian Therese Pineza
+Lorraine Alexandra Tamondong
+* Alea Grasha Masiglat
+Cc Hermoso
+
+Who is the Thomasian Wellness Advocate?
+Andrea Pauline Tan
+Alea Grasha Masiglat
+Lorraine Alexandra Tamondong
+* Khristine Caryl Mirasol
+
+How old is Computer Science Society?
+15
+* 18
+20
+67
+
+What is the name of the CSS mascot?
+* CSar
+Ceecee
+Daniel
+Ceasar
+
+What sequence surrounds the CSS logo to symbolize the Computer Science community?
+A series of hashtags
+* Ones and zeroes
+The Fibonacci sequence
+The alphabet`;
 
 // Text-first editor: hosts paste from a doc, preview shows exactly what phones will get.
 export function QuestionEditor({ text, onChange }: { text: string; onChange: (text: string) => void }) {
