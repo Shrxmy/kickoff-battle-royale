@@ -166,6 +166,21 @@ test("removals keep places gap-free; the host can remove knocked-out players, Le
   assert.deepEqual(rank(g).map((p) => p.place), [1, 2, 3]);
 });
 
+test("questions are shuffled with no repeats until the deck runs out, never back-to-back", () => {
+  const qs = [0, 1, 2, 3].map((i) => ({ ...Q[0], text: `Q${i}` }));
+  for (let trial = 0; trial < 200; trial++) {
+    let g: Game = { ...lobby(2, 10), questions: qs };
+    const seen: number[] = [];
+    for (let r = 0; r < 12; r++) {
+      g = startRound(g, 0);
+      seen.push(g.q);
+      g = { ...g, phase: "result" };
+    }
+    for (let d = 0; d < 12; d += 4) assert.deepEqual(seen.slice(d, d + 4).sort(), [0, 1, 2, 3], "each pass uses every question once");
+    assert.ok(seen.every((q, i) => i === 0 || q !== seen[i - 1]), "no question twice in a row");
+  }
+});
+
 test("parses pasted text and JSON question sets", () => {
   const qs = parseQuestions("What is 2+2?\n3\n* 4\n5\n\r\nCPU means?\r\n*Central Processing Unit\r\nComputer Power Unit");
   assert.deepEqual(qs, [

@@ -158,7 +158,13 @@ export function pair(ids: string[], rand: Rand = Math.random): Duel[] {
 }
 
 export function startRound(g: Game, now: number, rand: Rand = Math.random): Game {
-  const deck = g.deck.length ? g.deck : shuffle(g.questions.map((_, i) => i), rand);
+  // Shuffled deck: no repeats until every question is used, then reshuffle.
+  let deck = g.deck;
+  if (!deck.length) {
+    deck = shuffle(g.questions.map((_, i) => i), rand);
+    // Don't open the fresh deck with the question that just ended the old one.
+    if (g.round > 0 && deck.length > 1 && deck[0] === g.q) deck = [...deck.slice(1), deck[0]];
+  }
   return {
     ...g,
     phase: "question",
