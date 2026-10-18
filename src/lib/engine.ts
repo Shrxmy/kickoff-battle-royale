@@ -4,6 +4,7 @@
 export const BOT = "bot";
 export const MAX_PLAYERS = 90; // shortcut: Supabase free plan caps 100 msgs/s and each broadcast costs one per phone; Pro (500/s) allows ~400
 export const GRACE_MS = 1500; // REST answers from phones need a moment to arrive
+export const INTRO_MS = 2000; // VS splash before each question; added to the round so nobody loses answer time
 
 export type Question = { text: string; choices: string[]; correct: number };
 export type Settings = { energy: number; duration: number }; // duration in seconds
@@ -158,22 +159,28 @@ const rematches = (s: string[], lastFoe: Record<string, string | undefined>) => 
   return n;
 };
 
-export function pair(ids: string[], rand: Rand = Math.random, lastFoe: Record<string, string | undefined> = {}, bots: Record<string, number> = {}): Duel[] {
-  let s = shuffle(ids, rand);
-  const duels: Duel[] = [];
-  if (s.length % 2) {
-    // The bot is the easy draw: whoever has faced it least gets it (shuffle order breaks ties).
-    const fewest = Math.min(...s.map((id) => bots[id] ?? 0));
-    const solo = s.find((id) => (bots[id] ?? 0) === fewest)!;
-    s = s.filter((id) => id !== solo);
-    duels.push([solo, BOT]);
-  }
-  // Reshuffle to dodge back-to-back rematches; only 2 players left makes one unavoidable.
+// Reshuffle to dodge back-to-back rematches; only 2 players left makes one unavoidable.
+function dodge(s: string[], rand: Rand, lastFoe: Record<string, string | undefined>) {
   for (let tries = 0; tries < 30 && rematches(s, lastFoe) > 0; tries++) {
     const t = shuffle(s, rand);
     if (rematches(t, lastFoe) < rematches(s, lastFoe)) s = t;
   }
-  for (let i = 0; i < s.length; i += 2) duels.push([s[i], s[i + 1]]);
+  return s;
+}
+
+export function pair(ids: string[], rand: Rand = Math.random, lastFoe: Record<string, string | undefined> = {}, bots: Record<string, number> = {}): Duel[] {
+  const s = shuffle(ids, rand);
+  // Odd count: the bot is the easy draw, so whoever has faced it least gets it (shuffle order
+  // breaks ties), unless that forces a rematch the next candidate avoids (3 players left).
+  const solos = s.length % 2 ? [...s].sort((x, y) => (bots[x] ?? 0) - (bots[y] ?? 0)) : [undefined];
+  let best: { solo?: string; rest: string[] } | undefined;
+  for (const solo of solos) {
+    const rest = dodge(s.filter((id) => id !== solo), rand, lastFoe);
+    if (!best || rematches(rest, lastFoe) < rematches(best.rest, lastFoe)) best = { solo, rest };
+    if (rematches(rest, lastFoe) === 0) break;
+  }
+  const duels: Duel[] = best!.solo ? [[best!.solo, BOT]] : [];
+  for (let i = 0; i < best!.rest.length; i += 2) duels.push([best!.rest[i], best!.rest[i + 1]]);
   return duels;
 }
 
@@ -207,7 +214,7 @@ export function startRound(g: Game, now: number, rand: Rand = Math.random): Game
     players,
     answers: {},
     results: [],
-    endsAt: now + g.settings.duration * 1000 + GRACE_MS,
+    endsAt: now + INTRO_MS + g.settings.duration * 1000 + GRACE_MS,
   };
 }
 
@@ -217,6 +224,8 @@ const inDuel = (g: Game, id: string) => g.duels.some((d) => d.includes(id));
 export function answer(g: Game, a: { id: string; n: number; choice: number; ms: number }, now: number): Game {
   const q = g.questions[g.q];
   if (g.phase !== "question" || now > g.endsAt || a?.n !== g.round || typeof a.id !== "string" || a.id === BOT || isOut(g, a.id)) return g;
+  // Nothing counts during the VS intro (phones only show choices after it).
+  if (now < g.endsAt - GRACE_MS - g.settings.duration * 1000) return g;
   if (Object.hasOwn(g.answers, a.id) || !inDuel(g, a.id)) return g;
   if (!Number.isInteger(a.choice) || a.choice < 0 || a.choice >= q.choices.length) return g;
   const ms = Math.min(Math.max(Number(a.ms) || 0, 0), g.settings.duration * 1000);

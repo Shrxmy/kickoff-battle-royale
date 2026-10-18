@@ -102,3 +102,61 @@ export function Confetti({ count = 70 }: { count?: number }) {
 export function TitlePill({ children }: { children: React.ReactNode }) {
   return <h1 className={`${titlePill} mx-auto animate-fade-in-up`}>{children}</h1>;
 }
+
+// Jagged comic sticker ("VS", "K.O.!", "WIN!"). Slams in once on mount.
+export function Burst({ children, className = "", style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+  return (
+    <span className={`burst animate-slam grid place-items-center font-poppins font-black italic ${className}`} style={style}>
+      {children}
+    </span>
+  );
+}
+
+// Full-screen comic split shown for `ms` before a question: `top` slides in from the right,
+// `bottom` from the left, then `center` slams down the middle. Unmounts itself when done.
+export function VsIntro({ ms, top, bottom, center }: { ms: number; top: React.ReactNode; bottom: React.ReactNode; center: string }) {
+  const [on, setOn] = useState(ms > 150);
+  useEffect(() => {
+    const t = setTimeout(() => setOn(false), ms);
+    return () => clearTimeout(t);
+  }, [ms]);
+  if (!on) return null;
+  return (
+    <div
+      className="comic-navy fixed inset-0 z-40 overflow-hidden"
+      style={{ animation: `intro-out 0.3s ease-in ${Math.max(0, ms - 300)}ms forwards` }}
+      role="presentation"
+    >
+      <div className="absolute inset-0 animate-jolt" style={{ animationDelay: "0.75s" }}>
+        <div className="comic-amber absolute inset-0 flex items-start justify-end p-6 pt-[10vh] [clip-path:polygon(0_0,100%_0,100%_44%,0_58%)] sm:pr-[12vw]">
+          <div className="animate-slide-in-right">{top}</div>
+        </div>
+        <div className="comic-blue absolute inset-0 flex items-end justify-start p-6 pb-[10vh] [clip-path:polygon(0_60%,100%_46%,100%_100%,0_100%)] sm:pl-[12vw]">
+          <div className="animate-slide-in-left" style={{ animationDelay: "0.15s" }}>{bottom}</div>
+        </div>
+        <div className="absolute inset-0 grid place-items-center">
+          <Burst
+            className={`bg-white text-[#E5383B] drop-shadow-[0_6px_0_rgba(0,0,0,0.35)] ${
+              center.length > 3 ? "size-56 text-4xl sm:size-80 sm:text-7xl" : "size-40 text-6xl sm:size-56 sm:text-8xl"
+            }`}
+            style={{ animationDelay: "0.55s" }}
+          >
+            {center}
+          </Burst>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One fighter in the VS intro: big avatar on a tilted name banner.
+export function Fighter({ avatar, name, tilt = "-rotate-3" }: { avatar: string; name: string; tilt?: string }) {
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <Avatar id={avatar} size={150} className="drop-shadow-[0_10px_0_rgba(0,0,0,0.25)]" />
+      <span className={`${tilt} max-w-[70vw] truncate rounded-md bg-white px-4 py-1 font-poppins text-2xl font-black text-[#0E2A4D] uppercase shadow-[4px_4px_0_#0E2A4D]`}>
+        {name}
+      </span>
+    </div>
+  );
+}

@@ -3,9 +3,9 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { Crown, LogOut } from "lucide-react";
-import { BOT, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
+import { BOT, INTRO_MS, type HostMsg, type PlayerMap, type PlayerMsg } from "@/lib/engine";
 import { inboxName, post, roomName, subscribe, type Status } from "@/lib/realtime";
-import { AVATARS, Avatar, Brand, Confetti, Countdown, Energy, TitlePill } from "@/components/game";
+import { AVATARS, Avatar, Brand, Burst, Confetti, Countdown, Energy, Fighter, TitlePill, VsIntro } from "@/components/game";
 import { card, cta, focus, input, letters, pill, tiles } from "@/components/ui";
 
 type Me = { code: string; id: string; name: string; avatar: string };
@@ -238,7 +238,7 @@ function Waiting({ me, joined, players }: { me: Me; joined: boolean; players: [s
       {joined && others.length > 0 && (
         <ul className="mt-1 flex flex-wrap justify-center -space-x-2" aria-label="Other players">
           {others.slice(-12).map(([id, name, avatar]) => (
-            <li key={id} title={name} className="animate-pop rounded-full bg-[#F3F8FF] p-0.5 ring-2 ring-white">
+            <li key={id} title={name} className="animate-bounce-in rounded-full bg-[#F3F8FF] p-0.5 ring-2 ring-white">
               <Avatar id={avatar} size={32} />
             </li>
           ))}
@@ -279,16 +279,48 @@ const opponent = (duels: [string, string][], id: string) => {
 };
 
 function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }) {
+  const opp = opponent(msg.duels, me.id);
+  // Whatever is left beyond the answer window is VS intro; a phone rejoining mid-round gets none.
+  const [intro] = useState(() => Math.max(0, Math.min(INTRO_MS, msg.left - msg.duration * 1000)));
+  const [asking, setAsking] = useState(intro === 0);
+  useEffect(() => {
+    const t = setTimeout(() => setAsking(true), intro);
+    return () => clearTimeout(t);
+  }, [intro]);
+
+  if (!opp) {
+    const [, , energy] = msg.players[me.id];
+    return energy > 0 ? (
+      <Notice title="Sit this one out" text="You'll be paired next round." />
+    ) : (
+      <Notice title="You're out!" text="Out of energy. Watch the big screen to see who wins." img="sad" />
+    );
+  }
+  const [oppName, oppAvatar] = msg.players[opp];
+  return (
+    <>
+      <VsIntro
+        ms={intro}
+        center="VS"
+        top={<Fighter avatar={opp === BOT ? BOT : oppAvatar} name={opp === BOT ? "CSAR Bot" : oppName} tilt="rotate-3" />}
+        bottom={<Fighter avatar={me.avatar} name="You" />}
+      />
+      {asking && <Ask me={me} msg={msg} opp={opp} left={Math.max(0, msg.left - intro)} />}
+    </>
+  );
+}
+
+function Ask({ me, msg, opp, left }: { me: Me; msg: Extract<HostMsg, { t: "round" }>; opp: string; left: number }) {
   const shownAt = useRef(0);
   const [picked, setPicked] = useState<number | null>(null);
   const [timeUp, setTimeUp] = useState(false);
-  const opp = opponent(msg.duels, me.id);
 
   useEffect(() => {
-    shownAt.current = performance.now();
-    const t = setTimeout(() => setTimeUp(true), msg.left);
+    // Time from when the choices first appeared this round, so refreshing mid-question can't reset the speed clock.
+    shownAt.current = performance.now() - Math.max(0, msg.duration * 1000 - left);
+    const t = setTimeout(() => setTimeUp(true), left);
     return () => clearTimeout(t);
-  }, [msg.left]);
+  }, [left, msg.duration]);
 
   async function pick(choice: number) {
     if (picked !== null || timeUp) return;
@@ -300,28 +332,19 @@ function Question({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "round" }> }
     if (!(await post(inboxName(me.code), a).catch(() => false))) post(inboxName(me.code), a).catch(() => {});
   }
 
-  if (!opp) {
-    const [, , energy] = msg.players[me.id];
-    return energy > 0 ? (
-      <Notice title="Sit this one out" text="You'll be paired next round." />
-    ) : (
-      <Notice title="You're out!" text="Out of energy. Watch the big screen to see who wins." img="sad" />
-    );
-  }
-
   return (
     <div className="flex flex-1 flex-col gap-4">
       <div className="flex items-center justify-between text-xs font-semibold text-[#134687]/60">
         <span>Round {msg.n}</span>
         <span className="flex items-center gap-1">
-          <Countdown ms={msg.left} className="font-poppins text-base text-[#134687]" />s left
+          <Countdown ms={left} className="font-poppins text-base text-[#134687]" />s left
         </span>
       </div>
       <Duelists me={me.id} opp={opp} players={msg.players} />
       <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#E8F2FF]" role="presentation">
         <div
           className="timer-bar h-full rounded-full bg-[linear-gradient(90deg,#2F7EE3,#0349A2)]"
-          style={{ "--t": `${msg.left}ms`, width: `${(msg.left / (msg.duration * 1000)) * 100}%` } as React.CSSProperties}
+          style={{ "--t": `${left}ms`, width: `${(left / (msg.duration * 1000)) * 100}%` } as React.CSSProperties}
         />
       </div>
       <h2 className={`${card} animate-fade-in-up p-4 text-center font-poppins text-lg font-semibold sm:text-xl`}>{msg.q.text}</h2>
@@ -371,7 +394,17 @@ function Result({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "result" }> })
     <div className="flex flex-col gap-4">
       <Duelists me={me.id} opp={opp} players={msg.players} lost={r.winner && (r.winner === me.id ? opp : me.id)} />
       <div className={`${card} flex animate-pop flex-col items-center gap-2 p-6 text-center`}>
-        <Image src={`/csar/${outcome === "won" ? "excited" : outcome === "lost" ? "sad" : "bot"}.webp`} alt="" width={120} height={120} />
+        <div className="relative">
+          <Image src={`/csar/${outcome === "won" ? "excited" : outcome === "lost" ? "sad" : "bot"}.webp`} alt="" width={120} height={120} />
+          <Burst
+            className={`absolute -top-3 -right-16 size-24 text-2xl ${
+              outcome === "won" ? "bg-[#FFBC2B] text-[#0E2A4D]" : outcome === "lost" ? "bg-[#E5383B] text-white" : "bg-[#E8F2FF] text-[#134687]"
+            }`}
+            style={{ animationDelay: "0.2s" }}
+          >
+            {{ won: "WIN!", lost: "K.O.", draw: "TIE" }[outcome]}
+          </Burst>
+        </div>
         <h2 className={`font-poppins text-3xl font-bold ${outcome === "won" ? "text-green-700" : outcome === "lost" ? "text-red-700" : ""}`}>{title}</h2>
         <p className="text-sm text-[#134687]/70">
           {mine === null ? "You didn't answer." : mine === msg.correct ? "You got it right." : "Not quite."} Answer:{" "}
@@ -398,8 +431,8 @@ function End({ me, msg }: { me: Me; msg: Extract<HostMsg, { t: "end" }> }) {
         </div>
       )}
       <ol className={`${card} divide-y divide-[#005FD9]/10 p-2`}>
-        {msg.ranking.slice(0, 5).map((p) => (
-          <li key={p.id} className={`flex items-center gap-3 px-3 py-2 ${p.id === me.id ? "font-semibold" : ""}`}>
+        {msg.ranking.slice(0, 5).map((p, i) => (
+          <li key={p.id} className={`flex animate-fade-in-up items-center gap-3 px-3 py-2 ${p.id === me.id ? "font-semibold" : ""}`} style={{ animationDelay: `${300 + i * 80}ms` }}>
             <span className="w-7">#{p.place}</span>
             <Avatar id={p.avatar} size={32} />
             <span className="flex-1 truncate">{p.name}</span>

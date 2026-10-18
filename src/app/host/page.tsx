@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Crown, Play, Users, X } from "lucide-react";
 import {
-  BOT, GRACE_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
+  BOT, GRACE_MS, INTRO_MS, MAX_PLAYERS, allAnswered, alive, answer, end, finishRound, isOver, join, kick, leave, newGame, publicView, rank, startRound,
   type DuelResult, type Game, type PlayerMsg, type Settings,
 } from "@/lib/engine";
 import { inboxName, localOnly, roomName, subscribe, type Status } from "@/lib/realtime";
-import { Avatar, Brand, Confetti, Countdown, Energy, TitlePill } from "@/components/game";
+import { Avatar, Brand, Burst, Confetti, Countdown, Energy, TitlePill, VsIntro } from "@/components/game";
 import { JoinQR } from "@/components/JoinQR";
 import { QuestionEditor, SAMPLE, questionsOf } from "@/components/QuestionEditor";
 import { card, cta, danger, focus, letters, pill, secondary, tiles } from "@/components/ui";
@@ -261,6 +261,8 @@ function Lobby({ game, joinUrl, onKick, onStart, onCancel }: {
   game: Game; joinUrl: string; onKick: (id: string) => void; onStart: () => void; onCancel: () => void;
 }) {
   const players = Object.values(game.players);
+  const dense = players.length > 24;
+  const packed = players.length > 60;
   return (
     <div className="grid flex-1 gap-6 lg:grid-cols-[minmax(320px,420px)_1fr]">
       <section className={`${card} flex flex-col items-center gap-4 p-6 text-center`}>
@@ -276,7 +278,7 @@ function Lobby({ game, joinUrl, onKick, onStart, onCancel }: {
       <section className={`${card} flex min-w-0 flex-col gap-4 p-6`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="flex items-center gap-2 font-poppins text-2xl font-semibold">
-            <Users aria-hidden /> {players.length}
+            <Users aria-hidden /> <span key={players.length} className="inline-block animate-pop">{players.length}</span>
             <span className="text-base font-normal text-[#134687]/60">/ {MAX_PLAYERS} players</span>
           </h2>
           <div className="flex gap-2">
@@ -291,11 +293,14 @@ function Lobby({ game, joinUrl, onKick, onStart, onCancel }: {
         {players.length === 0 ? (
           <p className="m-auto animate-pulse text-lg text-[#134687]/60">Waiting for players…</p>
         ) : (
-          <ul className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
-            {players.map((p) => (
-              <li key={p.id} className="group relative flex animate-pop flex-col items-center gap-1 rounded-xl bg-[#F3F8FF] p-3">
-                <Avatar id={p.avatar} size={64} />
-                <span className="w-full truncate text-center text-sm font-semibold">{p.name}</span>
+          // Tiles shrink as the room fills so a 90-player lobby still fits on the projector.
+          <ul className={`grid ${packed ? "grid-cols-[repeat(auto-fill,minmax(64px,1fr))] gap-1.5" : dense ? "grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2" : "grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3"}`}>
+            {players.map((p, i) => (
+              <li key={p.id} className={`group relative flex animate-bounce-in flex-col items-center gap-1 rounded-xl bg-[#F3F8FF] ${dense ? "p-1.5" : "p-3"}`}>
+                <span className="animate-bob" style={{ animationDelay: `${-(i % 7) * 0.35}s` }}>
+                  <Avatar id={p.avatar} size={packed ? 32 : dense ? 44 : 64} />
+                </span>
+                <span className={`w-full truncate text-center font-semibold ${packed ? "text-[10px]" : dense ? "text-xs" : "text-sm"}`}>{p.name}</span>
                 <RemoveButton name={p.name} onClick={() => onKick(p.id)} />
               </li>
             ))}
@@ -321,8 +326,29 @@ function RemoveButton({ name, onClick }: { name: string; onClick: () => void }) 
   );
 }
 
-function TimerBar({ endsAt, duration }: { endsAt: number; duration: number }) {
-  const [left] = useState(() => Math.max(0, endsAt - GRACE_MS - Date.now()));
+// Remounted per round: plays the ROUND/FIGHT splash for the intro, then runs the answer timer.
+function TimerBar({ endsAt, duration, round, duels }: { endsAt: number; duration: number; round: number; duels: number }) {
+  const [intro] = useState(() => Math.max(0, Math.min(INTRO_MS, endsAt - GRACE_MS - Date.now() - duration * 1000)));
+  const [asking, setAsking] = useState(intro <= 150);
+  useEffect(() => {
+    const t = setTimeout(() => setAsking(true), intro);
+    return () => clearTimeout(t);
+  }, [intro]);
+  if (!asking) {
+    return (
+      <VsIntro
+        ms={intro}
+        center="FIGHT!"
+        top={<span className="font-poppins text-7xl font-black text-[#0E2A4D] italic drop-shadow-[4px_4px_0_white] sm:text-9xl">ROUND {round}</span>}
+        bottom={<span className="font-poppins text-4xl font-black text-white italic drop-shadow-[4px_4px_0_#0E2A4D] sm:text-6xl">{duels} duels</span>}
+      />
+    );
+  }
+  return <AnswerTimer endsAt={endsAt} duration={duration} />;
+}
+
+function AnswerTimer({ endsAt, duration }: { endsAt: number; duration: number }) {
+  const [left] = useState(() => Math.max(0, Math.min(duration * 1000, endsAt - GRACE_MS - Date.now())));
   return (
     <div className="flex items-center gap-3">
       <div className="h-3 w-full overflow-hidden rounded-full bg-[#E8F2FF]" role="presentation">
@@ -343,6 +369,7 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
   const results = new Map(game.results.map((r) => [r.a, r]));
   const dueling = game.duels.flat().filter((id) => id !== BOT && !game.kicked?.includes(id));
   const answered = dueling.filter((id) => Object.hasOwn(game.answers, id)).length;
+  const compact = game.duels.length > 12;
   return (
     <div className="flex flex-1 flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -366,7 +393,7 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
           {isOver(game) ? "Final results in" : "Next round in"} <Countdown key={game.round} ms={RESULT_MS} />…
         </p>
       ) : (
-        <TimerBar key={game.round} endsAt={game.endsAt} duration={game.settings.duration} />
+        <TimerBar key={game.round} endsAt={game.endsAt} duration={game.settings.duration} round={game.round} duels={game.duels.length} />
       )}
       <section className={`${card} p-5 sm:p-8`}>
         <h2 className="text-center font-poppins text-2xl font-semibold sm:text-4xl">{q.text}</h2>
@@ -385,9 +412,9 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
           ))}
         </div>
       </section>
-      <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
-        {game.duels.map(([a, b]) => (
-          <DuelCard key={a} game={game} a={a} b={b} result={reveal ? results.get(a) : undefined} onKick={onKick} />
+      <ul className={`grid ${compact ? "grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2" : "grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3"}`}>
+        {game.duels.map(([a, b], i) => (
+          <DuelCard key={a} game={game} a={a} b={b} result={reveal ? results.get(a) : undefined} onKick={onKick} compact={compact} delay={Math.min(i * 30, 600)} />
         ))}
       </ul>
       <div className="fixed right-4 bottom-4 hidden flex-col items-center gap-1 rounded-xl bg-white p-2 shadow-md lg:flex">
@@ -398,7 +425,9 @@ function Round({ game, joinUrl, onKick, onEnd }: { game: Game; joinUrl: string; 
   );
 }
 
-function DuelCard({ game, a, b, result, onKick }: { game: Game; a: string; b: string; result?: DuelResult; onKick: (id: string) => void }) {
+function DuelCard({ game, a, b, result, onKick, compact, delay }: {
+  game: Game; a: string; b: string; result?: DuelResult; onKick: (id: string) => void; compact: boolean; delay: number;
+}) {
   const side = (id: string) => {
     const p = game.players[id];
     const out = !!game.kicked?.includes(id);
@@ -408,13 +437,18 @@ function DuelCard({ game, a, b, result, onKick }: { game: Game; a: string; b: st
       <div className={`group relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl p-2 ${won ? "bg-green-50 ring-2 ring-green-500" : ""} ${lost && !out ? "animate-shake" : ""}`}>
         {id !== BOT && !out && <RemoveButton name={p.name} onClick={() => onKick(id)} />}
         <div className="relative">
-          <Avatar id={id === BOT ? BOT : p.avatar} size={56} className={p && p.energy === 0 ? "grayscale" : ""} />
+          <Avatar id={id === BOT ? BOT : p.avatar} size={compact ? 40 : 56} className={p && p.energy === 0 ? "grayscale" : ""} />
           {won && <Crown size={20} className="absolute -top-2 -right-2 fill-[#FFBC2B] text-[#CE9823]" aria-label="Winner" />}
+          {lost && (
+            <Burst className="absolute -top-3 -left-5 size-12 bg-[#E5383B] text-xs text-white" style={{ animationDelay: `${delay}ms` }}>
+              K.O.
+            </Burst>
+          )}
           {!result && id !== BOT && game.answers[id] && (
             <Check size={18} className="absolute -right-1 -bottom-1 rounded-full bg-green-600 p-0.5 text-white" aria-label="Answered" />
           )}
         </div>
-        <span className="w-full truncate text-center text-sm font-semibold">{id === BOT ? "CSAR Bot" : p.name}</span>
+        <span className={`w-full truncate text-center font-semibold ${compact ? "text-xs" : "text-sm"}`}>{id === BOT ? "CSAR Bot" : p.name}</span>
         {id === BOT ? (
           <Energy value={-1} />
         ) : out ? (
@@ -426,9 +460,11 @@ function DuelCard({ game, a, b, result, onKick }: { game: Game; a: string; b: st
     );
   };
   return (
-    <li className={`${card} flex items-center gap-1 p-2`}>
+    <li className={`${card} flex animate-pop items-center gap-1 p-2`} style={{ animationDelay: `${delay}ms` }}>
       {side(a)}
-      <span className="shrink-0 font-poppins text-sm font-bold text-[#134687]/50">{result && !result.winner ? "DRAW" : "VS"}</span>
+      <span key={String(!!result)} className={`shrink-0 font-poppins text-sm font-black italic ${result && !result.winner ? "animate-pop text-[#CE9823]" : "text-[#E5383B]"}`}>
+        {result && !result.winner ? "DRAW" : "VS"}
+      </span>
       {side(b)}
     </li>
   );
@@ -460,8 +496,8 @@ function Podium({ game, onNew }: { game: Game; onNew: () => void }) {
       </div>
       {ranking.length > 3 && (
         <ol className={`${card} w-full max-w-xl divide-y divide-[#005FD9]/10 p-2`}>
-          {ranking.slice(3).map((p) => (
-            <li key={p.id} className="flex items-center gap-3 px-3 py-2">
+          {ranking.slice(3).map((p, i) => (
+            <li key={p.id} className="flex animate-fade-in-up items-center gap-3 px-3 py-2" style={{ animationDelay: `${1200 + Math.min(i, 20) * 60}ms` }}>
               <span className="w-8 font-semibold">#{p.place}</span>
               <Avatar id={p.avatar} size={32} />
               <span className="flex-1 truncate">{p.name}</span>
